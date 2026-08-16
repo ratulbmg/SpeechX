@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Without this key, macOS does not show the microphone permission
+         dialog at all — it silently denies access instead. This file is
+         merged into the Tauri-generated Info.plist automatically. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>SpeechX needs microphone access to transcribe what you say into text.</string>
+</dict>
+</plist>

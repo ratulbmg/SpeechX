@@ -1,0 +1,32 @@
+# Adding language #4+ is meant to be a data-only edit here (PROMPT.md §8) —
+# no Rust changes needed to add a language to the fuzzy matcher's
+# vocabulary. Actually being able to *transcribe* the new language is a
+# separate matter: today every language here is served by the same
+# Whisper base model reloaded with a different `language` code, since
+# that's the only ASR engine implemented so far (see asr/whisper.rs's doc
+# comment on why IndicConformer isn't available yet). `engine`/`model`
+# below are recorded for forward-compat with that split but unused today.
+
+[[language]]
+code = "en"
+display = "English"
+native = "English"
+engine = "whisper"
+model = "whisper-base"
+aliases = ["english", "inglish", "angrezi", "ingreji", "ইংরেজি", "अंग्रेज़ी"]
+
+[[language]]
+code = "hi"
+display = "Hindi"
+native = "हिंदी"
+engine = "whisper"
+model = "whisper-base"
+aliases = ["hindi", "hindee", "hindhi", "हिंदी", "हिन्दी", "hindustani"]
+
+[[language]]
+code = "bn"
+display = "Bengali"
+native = "বাংলা"
+engine = "whisper"
+model = "whisper-base"
+aliases = ["bengali", "bangla", "bangali", "bengoli", "benagli", "বাংলা", "বাঙলা"]

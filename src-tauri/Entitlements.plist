@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Microphone access (PROMPT.md §11). -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+
+    <!-- ONNX Runtime (via sherpa-onnx) needs these three under the
+         hardened runtime required for notarization — without them it
+         crashes on first inference on a signed+notarized build. Unverified
+         against Apple's current hardened-runtime docs for this exact ONNX
+         Runtime version; revisit if signed builds crash on model load. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

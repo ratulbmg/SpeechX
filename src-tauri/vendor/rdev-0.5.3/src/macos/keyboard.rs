@@ -4,7 +4,6 @@ use crate::rdev::{EventType, Key, KeyboardState};
 use core_foundation::base::{CFRelease, OSStatus};
 use core_foundation::string::UniChar;
 use core_foundation_sys::data::{CFDataGetBytePtr, CFDataRef};
-use core_graphics::event::CGEventFlags;
 use std::convert::TryInto;
 use std::ffi::c_void;
 use std::os::raw::c_uint;
@@ -18,16 +17,6 @@ type OptionBits = c_uint;
 static kUCKeyTranslateDeadKeysBit: OptionBits = 1 << 31;
 #[allow(non_upper_case_globals)]
 static kUCKeyActionDown: u16 = 0;
-#[allow(non_upper_case_globals)]
-static NSEventModifierFlagCapsLock: u64 = 1 << 16;
-#[allow(non_upper_case_globals)]
-static NSEventModifierFlagShift: u64 = 1 << 17;
-#[allow(non_upper_case_globals)]
-static NSEventModifierFlagControl: u64 = 1 << 18;
-#[allow(non_upper_case_globals)]
-static NSEventModifierFlagOption: u64 = 1 << 19;
-#[allow(non_upper_case_globals)]
-static NSEventModifierFlagCommand: u64 = 1 << 20;
 
 const BUF_LEN: usize = 4;
 
@@ -75,15 +64,6 @@ impl Keyboard {
         } else {
             0
         }
-    }
-
-    pub(crate) unsafe fn create_string_for_key(
-        &mut self,
-        code: u32,
-        flags: CGEventFlags,
-    ) -> Option<String> {
-        let modifier_state = flags_to_state(flags.bits());
-        self.string_from_code(code, modifier_state)
     }
 
     pub(crate) unsafe fn string_from_code(
@@ -159,30 +139,4 @@ impl KeyboardState for Keyboard {
         self.shift = false;
         self.caps_lock = false;
     }
-}
-
-#[allow(clippy::identity_op)]
-pub unsafe fn flags_to_state(flags: u64) -> ModifierState {
-    let has_alt = flags & NSEventModifierFlagOption;
-    let has_caps_lock = flags & NSEventModifierFlagCapsLock;
-    let has_control = flags & NSEventModifierFlagControl;
-    let has_shift = flags & NSEventModifierFlagShift;
-    let has_meta = flags & NSEventModifierFlagCommand;
-    let mut modifier = 0;
-    if has_alt != 0 {
-        modifier += 1 << 3;
-    }
-    if has_caps_lock != 0 {
-        modifier += 1 << 1;
-    }
-    if has_control != 0 {
-        modifier += 1 << 4;
-    }
-    if has_shift != 0 {
-        modifier += 1 << 1;
-    }
-    if has_meta != 0 {
-        modifier += 1 << 0;
-    }
-    modifier
 }

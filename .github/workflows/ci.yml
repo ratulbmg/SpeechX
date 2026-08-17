@@ -1,0 +1,131 @@
+name: CI
+
+# Runs on:
+#   - every pull request targeting main or develop (covers opening a PR,
+#     and every subsequent push to that PR's branch)
+#   - a direct push straight to main (rare — main is protected — but a
+#     safety net for anything that lands there without a PR)
+#
+# Deliberately NOT "push to develop" as well: develop is usually the
+# source branch of an open PR (into main), and GitHub fires both a
+# `push` event and a `pull_request` (synchronize) event for the same
+# commit in that case — `concurrency` below can't dedupe across them,
+# since push uses `refs/heads/develop` as its ref and pull_request uses
+# `refs/pull/<n>/merge`, so it silently ran the whole workflow twice.
+# `pull_request` alone covers develop just as well in practice.
+#
+# Does NOT run on tag pushes (release.yml handles those)
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+      - develop
+
+# If you push twice quickly, cancel the older run instead of
+# queueing both. Saves runner minutes and gives faster feedback.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # ─────────────────────────────────────────────────────────
+  # This job's `name:` value is what appears in the branch
+  # protection "required status checks" dropdown.
+  # Name shown in GitHub: "Build macOS"
+  # ─────────────────────────────────────────────────────────
+  build-macos:
+    name: Build macOS
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # tauri.conf.json bundles these models into the app (bundle.resources)
+      # so a downloaded .app works standalone. They're gitignored (large
+      # binaries), so anything that touches the Rust build needs them
+      # fetched first — and that's not just the final `tauri build` below:
+      # Tauri's build script validates every bundle.resources path exists
+      # on *every* cargo invocation, including `cargo clippy` and
+      # `cargo fmt --check`'s underlying compile step. This has to run
+      # before those, not just before the build step, or they fail first.
+      - name: Download ASR models
+        run: ./scripts/download_models.sh
+
+      - name: Type-check frontend
+        run: npx tsc --noEmit
+
+      - name: Check Rust formatting
+        working-directory: ./src-tauri
+        run: cargo fmt --check
+        continue-on-error: true   # warn only; do not fail the build on formatting
+
+      - name: Lint Rust
+        working-directory: ./src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+        continue-on-error: true   # set to false once the codebase is clippy-clean
+
+      - name: Build macOS app (native arch only — fast)
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+        run: npm run tauri build -- --target aarch64-apple-darwin
+
+  # ─────────────────────────────────────────────────────────
+  # Name shown in GitHub: "Build Windows"
+  # ─────────────────────────────────────────────────────────
+  build-windows:
+    name: Build Windows
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Download ASR models
+        shell: bash
+        run: ./scripts/download_models.sh
+
+      - name: Build Windows app
+        run: npm run tauri build

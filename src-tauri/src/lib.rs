@@ -60,14 +60,22 @@ pub fn run() {
             // Trigger the Accessibility / Input Monitoring system prompts
             // up front rather than letting the hotkey listener silently
             // receive nothing if they're not yet granted (see
-            // `permissions::macos`'s doc comment). Microphone prompting
-            // happens on its own via CoreAudio once Info.plist declares
-            // NSMicrophoneUsageDescription.
+            // `permissions::macos`'s doc comment).
             #[cfg(target_os = "macos")]
             {
                 permissions::macos::ensure_accessibility();
                 permissions::macos::ensure_input_monitoring();
             }
+
+            // Same idea for the microphone prompt: without this, it only
+            // fires the first time the user actually holds the hotkey —
+            // a confusing moment for a permission dialog to interrupt.
+            // Opening (then immediately closing) a stream at launch
+            // brings all three permission prompts together right after
+            // install. Blocking (waits for CoreAudio, and however long
+            // the user takes to answer the dialog), so it runs on its
+            // own thread rather than holding up the rest of setup().
+            tauri::async_runtime::spawn_blocking(audio::warm_up_microphone_permission);
 
             // The pill overlay (PROMPT.md §10 / M5): built once, hidden,
             // then shown/hidden per dictation session by the hotkey loop.
@@ -80,7 +88,13 @@ pub fn run() {
             // front, so no first use — dictation or language switch —
             // pays for model load time. Hindi shares Whisper with
             // English and only gets (re)loaded on first actual use.
-            tauri::async_runtime::spawn_blocking(|| {
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                // First run on a fresh install: copies the bundled models
+                // into place before anything tries to load them. A no-op
+                // on a dev machine that already has them.
+                config::paths::ensure_models_installed(&app_handle);
+
                 if let Err(err) = asr::manager::command_engine() {
                     tracing::error!(?err, "failed to preload command-mode whisper model");
                 }

@@ -18,6 +18,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# `WebviewWindowBuilder::transparent` (used in overlay/panel.rs — the pill
+# needs a truly transparent webview, not just a transparent NSWindow) is
+# gated behind the `macos-private-api` feature on macOS. We don't declare
+# it here: `tauri-nspanel`'s own dependency on `tauri` already enables it,
+# and Cargo unifies features across a build, so it's on regardless.
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"

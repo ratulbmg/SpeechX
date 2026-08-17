@@ -11,6 +11,13 @@ static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(Event)>> = None;
 #[link(name = "Cocoa", kind = "framework")]
 extern "C" {}
 
+// Original rdev code, predating this lint (stabilized after rdev 0.5.3
+// was published) — same single-threaded-callback pattern as before,
+// just now flagged as technically-riskier-in-general than a raw pointer
+// access. Not changing the access pattern itself, only silencing the
+// lint, to keep this patch narrowly scoped to the one real fix it exists
+// for (see common.rs's SpeechX patch comment).
+#[allow(static_mut_refs)]
 unsafe extern "C" fn raw_callback(
     _proxy: CGEventTapProxy,
     _type: CGEventType,

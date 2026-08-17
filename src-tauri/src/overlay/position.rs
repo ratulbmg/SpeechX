@@ -6,7 +6,7 @@
 //! worked out inline.
 #![allow(dead_code)]
 
-const PILL_WIDTH: f64 = 240.0;
+const PILL_WIDTH: f64 = 180.0;
 
 #[cfg(target_os = "macos")]
 const TOP_MARGIN: f64 = 44.0; // clears the notch

@@ -30,7 +30,7 @@ tauri_panel! {
 }
 
 pub const PILL_LABEL: &str = "pill";
-const PILL_WIDTH: f64 = 240.0;
+const PILL_WIDTH: f64 = 180.0;
 // Kept short deliberately — 84px (the original spec value) read as a
 // slab, not a minimal overlay, once actually on screen. Half the width
 // makes it a true pill/stadium shape (see the matching border-radius in
@@ -52,12 +52,23 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         // Built silently: no_activate keeps window creation from
         // momentarily bouncing the app to the foreground.
         .no_activate(true)
-        // Without this, the underlying window is created with the normal
-        // title bar (Tauri's default) and `style_mask` below then strips
-        // the Titled bit *after* creation — AppKit can throw on that
-        // post-hoc transition. Creating it borderless from the start
-        // avoids the transition entirely.
-        .with_window(|w| w.decorations(false))
+        // Without `.decorations(false)`, the underlying window is created
+        // with the normal title bar (Tauri's default) and `style_mask`
+        // below then strips the Titled bit *after* creation — AppKit can
+        // throw on that post-hoc transition. Creating it borderless from
+        // the start avoids the transition entirely.
+        //
+        // Without `.transparent(true)` *here* — Tauri's own webview-level
+        // transparency flag, distinct from `PanelBuilder::transparent()`
+        // above (which only clears the NSWindow's own background/opacity)
+        // — the WKWebView's own backing layer stays opaque white
+        // regardless of the window's transparency, so the pill shows as a
+        // white box instead of vanishing when hidden. Available without
+        // an explicit feature flag on our own `tauri` dependency because
+        // `tauri-nspanel` itself depends on `tauri` with
+        // `macos-private-api` enabled, and Cargo unifies that feature
+        // across the build.
+        .with_window(|w| w.decorations(false).transparent(true))
         .style_mask(StyleMask::empty().nonactivating_panel().borderless())
         .collection_behavior(
             CollectionBehavior::new()

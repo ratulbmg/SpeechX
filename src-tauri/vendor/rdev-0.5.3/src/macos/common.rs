@@ -79,6 +79,11 @@ extern "C" {
     pub static kCFRunLoopCommonModes: CFRunLoopMode;
 
 }
+// `CGEventRef` (from the `core-graphics` crate, not ours to change) isn't
+// `#[repr(C)]`, which trips this lint on any extern "C" fn signature using
+// it — even though it's just an opaque CoreFoundation pointer handle in
+// practice. Cosmetic only; not touching how this callback is invoked.
+#[allow(improper_ctypes_definitions)]
 pub type QCallback = unsafe extern "C" fn(
     proxy: CGEventTapProxy,
     _type: CGEventType,

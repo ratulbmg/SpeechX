@@ -33,6 +33,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../models/sherpa-onnx-whisper-base/": "models/sherpa-onnx-whisper-base/",
+      "../models/sherpa-onnx-streaming-zipformer-bn-vosk-2026-02-09/": "models/sherpa-onnx-streaming-zipformer-bn-vosk-2026-02-09/"
+    },
     "macOS": {
       "minimumSystemVersion": "11.0",
       "entitlements": "Entitlements.plist"

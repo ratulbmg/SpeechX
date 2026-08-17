@@ -33,3 +33,7 @@ dist-ssr
 /models
 *.wav
 PROMPT.md
+DEPLOYMENT.md
+
+# Claude Code local project settings (permissions etc. — machine-specific)
+.claude

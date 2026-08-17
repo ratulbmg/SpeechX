@@ -32,9 +32,6 @@ dist-ssr
 # SpeechX-specific
 /models
 *.wav
-PROMPT.md
-DEPLOYMENT.md
-ABOUT.md
 
 # Claude Code local project settings (permissions etc. — machine-specific)
 .claude

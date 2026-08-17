@@ -21,6 +21,15 @@ on:
     branches:
       - main
       - develop
+    # Skip the whole workflow when a PR only touches docs — no point
+    # spending macOS/Windows build minutes on a markdown-only change.
+    # Caveat: if build-macos/build-windows are required status checks on
+    # branch protection, a *skipped* workflow reports no status at all,
+    # which can leave the PR stuck "pending" instead of mergeable. If
+    # that happens, either drop them from required checks or add a
+    # fallback job that always runs to satisfy the requirement.
+    paths-ignore:
+      - '**.md'
 
 # If you push twice quickly, cancel the older run instead of
 # queueing both. Saves runner minutes and gives faster feedback.

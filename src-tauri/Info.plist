@@ -16,5 +16,19 @@
 
     <key>LSRequiresCarbon</key>
     <false/>
+
+    <!-- Without this, macOS's window-restoration ("Resume") feature
+         tracks SpeechX's window state across launches, and if the
+         process ever ends without going through a clean AppKit shutdown
+         (a force-quit, `kill`, or `app.exit()`'s abrupt process exit
+         rather than `NSApp.terminate:`'s normal teardown — all of which
+         happen routinely for a background utility like this one), the
+         next launch shows "SpeechX quit unexpectedly while reopening
+         windows — Reopen / Don't Reopen". SpeechX has no session state
+         worth restoring (just the dashboard, which reopens on demand via
+         the tray icon anyway), so it opts out of the feature entirely
+         rather than trying to make every possible exit path "clean". -->
+    <key>NSQuitAlwaysKeepsWindows</key>
+    <false/>
 </dict>
 </plist>

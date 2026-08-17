@@ -24,7 +24,8 @@ pub fn run() {
         )
         .init();
 
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         // Must be registered first (Tauri's requirement). Without this, a
         // second launch — e.g. two overlapping `tauri dev` runs during
         // development, or a user double-clicking the app icon twice —
@@ -34,8 +35,28 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|_app, args, cwd| {
             tracing::warn!(?args, ?cwd, "a second SpeechX instance tried to start — ignoring it, this one keeps running");
         }))
-        .plugin(tauri_plugin_opener::init())
-        .setup(|_app| {
+        .plugin(tauri_plugin_opener::init());
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+
+    builder
+        .setup(|app| {
+            // SpeechX is meant to run as a background/menu-bar utility
+            // (PROMPT.md §1) — without this, Tauri defaults to
+            // `NSApplicationActivationPolicyRegular`, a normal foreground
+            // app. That gives it a Dock icon and, critically, makes
+            // *launching* SpeechX steal activation from whatever app the
+            // user was in, and keeps stealing it back — so the "focused
+            // application" enigo injects into is SpeechX's own hidden
+            // window, not the app the user actually placed their cursor
+            // in. `Accessory` policy fixes both: no Dock icon, and the
+            // app never becomes the active/frontmost one, so the user's
+            // real target app keeps focus throughout.
+            #[cfg(target_os = "macos")]
+            app.handle().set_activation_policy(tauri::ActivationPolicy::Accessory)?;
+
             // Trigger the Accessibility / Input Monitoring system prompts
             // up front rather than letting the hotkey listener silently
             // receive nothing if they're not yet granted (see
@@ -48,7 +69,12 @@ pub fn run() {
                 permissions::macos::ensure_input_monitoring();
             }
 
-            tauri::async_runtime::spawn(hotkey::run());
+            // The pill overlay (PROMPT.md §10 / M5): built once, hidden,
+            // then shown/hidden per dictation session by the hotkey loop.
+            #[cfg(target_os = "macos")]
+            overlay::panel::create(app.handle())?;
+
+            tauri::async_runtime::spawn(hotkey::run(app.handle().clone()));
             // Load + warm the command-recognition engine and both
             // dictation engines (English/Whisper, Bengali/Zipformer) up
             // front, so no first use — dictation or language switch —

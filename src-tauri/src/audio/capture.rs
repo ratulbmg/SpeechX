@@ -23,6 +23,11 @@ pub struct CaptureSession {
     join: std::thread::JoinHandle<()>,
     consumer: SampleConsumer,
     pub info: StreamInfo,
+    /// Smoothed-at-source 0..1 microphone level, one message per audio
+    /// callback (PROMPT.md §10 audio-level pipeline). The pill's ~30 Hz
+    /// throttling happens on the receiving end, not here — the audio
+    /// callback must stay realtime-safe and just fires-and-forgets.
+    pub level_rx: std_mpsc::Receiver<f32>,
 }
 
 impl CaptureSession {
@@ -53,10 +58,11 @@ impl CaptureSession {
 
         let (stop_tx, stop_rx) = std_mpsc::channel::<()>();
         let (ready_tx, ready_rx) = std_mpsc::channel::<Result<(), String>>();
+        let (level_tx, level_rx) = std_mpsc::channel::<f32>();
 
         let join = std::thread::Builder::new()
             .name("speechx-audio-capture".into())
-            .spawn(move || run_capture_thread(device, config, sample_format, producer, stop_rx, ready_tx))
+            .spawn(move || run_capture_thread(device, config, sample_format, producer, stop_rx, ready_tx, level_tx))
             .map_err(|e| format!("failed to spawn audio thread: {e}"))?;
 
         ready_rx
@@ -68,7 +74,16 @@ impl CaptureSession {
             join,
             consumer,
             info,
+            level_rx,
         })
+    }
+
+    /// Hands the level receiver to the caller once, replacing it with an
+    /// already-closed stand-in — the audio thread's `send`s to the
+    /// original just start silently failing, same as they would once
+    /// this session ends.
+    pub fn take_level_rx(&mut self) -> std_mpsc::Receiver<f32> {
+        std::mem::replace(&mut self.level_rx, std_mpsc::channel().1)
     }
 
     /// Stops the stream and returns every raw sample captured, at the
@@ -86,6 +101,18 @@ impl CaptureSession {
     }
 }
 
+/// RMS of one callback's worth of samples, scaled/clamped to the 0..1
+/// range the pill's waveform expects. The `* 8.0` headroom multiplier is
+/// tuned for typical laptop-mic speaking volume, not derived from
+/// anything — PROMPT.md §10 flags it as a per-device knob.
+fn level_from_chunk(chunk: &[f32]) -> f32 {
+    if chunk.is_empty() {
+        return 0.0;
+    }
+    let rms = (chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len() as f32).sqrt();
+    (rms * 8.0).clamp(0.0, 1.0)
+}
+
 fn run_capture_thread(
     device: cpal::Device,
     config: cpal::StreamConfig,
@@ -93,6 +120,7 @@ fn run_capture_thread(
     mut producer: SampleProducer,
     stop_rx: std_mpsc::Receiver<()>,
     ready_tx: std_mpsc::Sender<Result<(), String>>,
+    level_tx: std_mpsc::Sender<f32>,
 ) {
     let err_fn = |err| error!(?err, "cpal stream error");
 
@@ -100,6 +128,7 @@ fn run_capture_thread(
         SampleFormat::F32 => device.build_input_stream(
             &config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                let _ = level_tx.send(level_from_chunk(data));
                 let _ = producer.push_slice(data);
             },
             err_fn,
@@ -109,6 +138,7 @@ fn run_capture_thread(
             &config,
             move |data: &[i16], _: &cpal::InputCallbackInfo| {
                 let converted: Vec<f32> = data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+                let _ = level_tx.send(level_from_chunk(&converted));
                 let _ = producer.push_slice(&converted);
             },
             err_fn,

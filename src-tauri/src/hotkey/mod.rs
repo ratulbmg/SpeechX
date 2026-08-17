@@ -6,6 +6,7 @@ use std::future::pending;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tauri::AppHandle;
 use tokio::time::Instant;
 use tracing::info;
 
@@ -34,7 +35,7 @@ fn read_active_language(lock: &Mutex<LanguageCode>) -> LanguageCode {
 /// Drives the chord state machine from real hotkey events. Dictate
 /// sessions run through ASR + text injection; Command sessions run
 /// through ASR + the language matcher and update `active_language`.
-pub async fn run() {
+pub async fn run(app: AppHandle) {
     let mut rx = match listener::spawn_listener() {
         Ok(rx) => rx,
         Err(err) => {
@@ -46,7 +47,7 @@ pub async fn run() {
     info!("hotkey listener attached — hold Right Cmd to dictate, Right Cmd + Right Option to switch language");
 
     let mut machine = ChordMachine::new();
-    let mut audio = AudioController::new();
+    let mut audio = AudioController::new(app.clone());
     let mut arm_deadline: Option<Instant> = None;
     let active_language = Arc::new(Mutex::new(LanguageCode::En));
 
@@ -65,6 +66,7 @@ pub async fn run() {
                 arm_deadline = None;
                 if let ChordOutcome::ModeResolved(mode) = machine.on_event(ChordEvent::ArmTimerFired { at_ms: now_ms() }) {
                     log_mode(mode);
+                    show_pill(&app, mode, &active_language);
                 }
             }
 
@@ -73,11 +75,35 @@ pub async fn run() {
                     tracing::warn!("hotkey listener channel closed — stopping");
                     break;
                 };
-                handle_raw_event(raw, &mut machine, &mut arm_deadline, &mut audio, &active_language);
+                handle_raw_event(raw, &mut machine, &mut arm_deadline, &mut audio, &active_language, &app);
             }
         }
     }
 }
+
+/// Looks up the active language's native-script display name (e.g.
+/// `বাংলা`) for the pill label — falls back to the code itself if
+/// `languages.toml` somehow doesn't have an entry for it.
+fn active_language_native(active_language: &Arc<Mutex<LanguageCode>>) -> String {
+    let code = read_active_language(active_language);
+    crate::lang::registry::enabled()
+        .iter()
+        .find(|l| l.code == code)
+        .map(|l| l.native.clone())
+        .unwrap_or_else(|| format!("{code:?}"))
+}
+
+#[cfg(target_os = "macos")]
+fn show_pill(app: &AppHandle, mode: Mode, active_language: &Arc<Mutex<LanguageCode>>) {
+    let label = match mode {
+        Mode::Dictate => active_language_native(active_language),
+        Mode::Command => "Say a language…".to_string(),
+    };
+    crate::overlay::panel::emit_show(app, mode, &label);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_pill(_app: &AppHandle, _mode: Mode, _active_language: &Arc<Mutex<LanguageCode>>) {}
 
 fn handle_raw_event(
     raw: RawKeyEvent,
@@ -85,6 +111,7 @@ fn handle_raw_event(
     arm_deadline: &mut Option<Instant>,
     audio: &mut AudioController,
     active_language: &Arc<Mutex<LanguageCode>>,
+    app: &AppHandle,
 ) {
     match raw {
         RawKeyEvent::Down(HotKey::RightCommand) => {
@@ -104,7 +131,7 @@ fn handle_raw_event(
                     info!("right command released before arming resolved — accidental tap, discarded");
                     audio.discard();
                 }
-                ChordOutcome::Idle => handle_session_end(prior_phase, audio, active_language),
+                ChordOutcome::Idle => handle_session_end(prior_phase, audio, active_language, app),
                 _ => {}
             }
         }
@@ -118,35 +145,55 @@ fn handle_raw_event(
             if let ChordOutcome::Cancelled = machine.on_event(ChordEvent::Escape) {
                 info!("Cancelled");
                 audio.discard();
+                #[cfg(target_os = "macos")]
+                crate::overlay::panel::emit_cancelled(app);
             }
         }
         RawKeyEvent::Up(HotKey::Escape) => {}
     }
 }
 
-fn handle_session_end(prior_phase: Phase, audio: &mut AudioController, active_language: &Arc<Mutex<LanguageCode>>) {
+fn handle_session_end(
+    prior_phase: Phase,
+    audio: &mut AudioController,
+    active_language: &Arc<Mutex<LanguageCode>>,
+    app: &AppHandle,
+) {
     match prior_phase {
         Phase::Recording(Mode::Dictate) => {
             if let Some(samples) = audio.finish() {
-                spawn_dictate_pipeline(samples, active_language.clone());
+                #[cfg(target_os = "macos")]
+                crate::overlay::panel::emit_transcribing(app);
+                spawn_dictate_pipeline(samples, active_language.clone(), app.clone());
             }
         }
         Phase::Recording(Mode::Command) => {
             if let Some(samples) = audio.finish() {
-                spawn_command_pipeline(samples, active_language.clone());
+                #[cfg(target_os = "macos")]
+                crate::overlay::panel::emit_transcribing(app);
+                spawn_command_pipeline(samples, active_language.clone(), app.clone());
             }
         }
         Phase::Cancelled => {
-            // Audio was already discarded when Esc fired.
+            // Audio was already discarded, and the pill already faded,
+            // when Esc fired.
             info!("session ended — back to idle");
         }
         Phase::Idle | Phase::Arming => {}
     }
 }
 
+#[cfg(target_os = "macos")]
+fn hide_pill(app: &AppHandle) {
+    crate::overlay::panel::emit_hide(app);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hide_pill(_app: &AppHandle) {}
+
 /// Runs ASR + injection on a blocking thread so the hotkey loop stays
 /// responsive to the next key-down while a transcription is in flight.
-fn spawn_dictate_pipeline(samples: Vec<f32>, active_language: Arc<Mutex<LanguageCode>>) {
+fn spawn_dictate_pipeline(samples: Vec<f32>, active_language: Arc<Mutex<LanguageCode>>, app: AppHandle) {
     tokio::task::spawn_blocking(move || {
         let language = read_active_language(&active_language);
 
@@ -154,6 +201,7 @@ fn spawn_dictate_pipeline(samples: Vec<f32>, active_language: Arc<Mutex<Language
             Ok(engine) => engine,
             Err(err) => {
                 tracing::error!(?err, "ASR unavailable");
+                hide_pill(&app);
                 return;
             }
         };
@@ -178,18 +226,20 @@ fn spawn_dictate_pipeline(samples: Vec<f32>, active_language: Arc<Mutex<Language
             }
             Err(err) => tracing::warn!(?err, "transcription produced nothing"),
         }
+        hide_pill(&app);
     });
 }
 
 /// Runs ASR + the fuzzy language matcher on a blocking thread, then
 /// updates `active_language` if a language was heard clearly enough
 /// (PROMPT.md §8).
-fn spawn_command_pipeline(samples: Vec<f32>, active_language: Arc<Mutex<LanguageCode>>) {
+fn spawn_command_pipeline(samples: Vec<f32>, active_language: Arc<Mutex<LanguageCode>>, app: AppHandle) {
     tokio::task::spawn_blocking(move || {
         let engine = match crate::asr::manager::command_engine() {
             Ok(engine) => engine,
             Err(err) => {
                 tracing::error!(?err, "command-mode ASR unavailable");
+                hide_pill(&app);
                 return;
             }
         };
@@ -207,6 +257,7 @@ fn spawn_command_pipeline(samples: Vec<f32>, active_language: Arc<Mutex<Language
             Ok(t) => t,
             Err(err) => {
                 tracing::warn!(?err, "didn't catch anything in command mode");
+                hide_pill(&app);
                 return;
             }
         };
@@ -219,12 +270,23 @@ fn spawn_command_pipeline(samples: Vec<f32>, active_language: Arc<Mutex<Language
                 *guard = code;
                 drop(guard);
                 info!(?code, score, "language switched");
+                let native = crate::lang::registry::enabled()
+                    .iter()
+                    .find(|l| l.code == code)
+                    .map(|l| l.native.clone())
+                    .unwrap_or_else(|| format!("{code:?}"));
+                #[cfg(target_os = "macos")]
+                crate::overlay::panel::emit_matched(&app, &native);
+                #[cfg(not(target_os = "macos"))]
+                let _ = native;
             }
             MatchResult::Ambiguous(a, b) => {
-                info!(?a, ?b, "ambiguous language match — no picker UI yet (M5/M6 pill work), keeping current language");
+                info!(?a, ?b, "ambiguous language match — no picker UI yet (M6 pill work), keeping current language");
+                hide_pill(&app);
             }
             MatchResult::NoMatch => {
                 info!(heard = %transcript.text, "didn't recognize a language name — keeping current language");
+                hide_pill(&app);
             }
         }
     });

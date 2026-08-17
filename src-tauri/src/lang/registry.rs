@@ -27,11 +27,9 @@ struct RawLanguage {
 pub struct Language {
     pub code: LanguageCode,
     // No reader yet since command-mode hotwords biasing isn't wired up
-    // (see hotkey::spawn_command_pipeline's TODO) — this and `native`
-    // below are what the pill (M5) will also show as the language name.
+    // (see hotkey::spawn_command_pipeline's TODO).
     #[allow(dead_code)]
     pub display: String,
-    #[allow(dead_code)]
     pub native: String,
     pub aliases: Vec<String>,
 }

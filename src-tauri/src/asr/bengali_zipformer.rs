@@ -11,9 +11,11 @@
 //! uses), because that's the only pre-built Bengali model that exists —
 //! there's no offline/batch Bengali model in the zoo. We don't do real
 //! incremental streaming with it: `transcribe` feeds the whole buffered
-//! recording in one shot, calls `input_finished()`, drains every ready
-//! decode step, then reads the final result. That's a standard, supported
-//! way to run a streaming model over a complete pre-recorded clip.
+//! recording in one shot, pads the tail with silence (see
+//! `tail_padding()` — without it the last word routinely gets dropped),
+//! calls `input_finished()`, drains every ready decode step, then reads
+//! the final result. That's a standard, supported way to run a streaming
+//! model over a complete pre-recorded clip.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -23,6 +25,13 @@ use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineTransducerMode
 use tracing::{info, warn};
 
 use super::engine::{AsrEngine, AsrError, AsrOptions, LanguageCode, Transcript};
+
+/// ~0.66s of silence at 16 kHz — matches sherpa-onnx's own
+/// `online-decode-files.py` reference. Enough trailing context for the
+/// streaming model to flush its last chunk instead of dropping it.
+fn tail_padding() -> Vec<f32> {
+    vec![0.0_f32; (0.66 * 16_000.0) as usize]
+}
 
 pub struct BengaliZipformerEngine {
     recognizer: Mutex<OnlineRecognizer>,
@@ -70,6 +79,15 @@ impl AsrEngine for BengaliZipformerEngine {
 
         let stream = recognizer.create_stream();
         stream.accept_waveform(16_000, samples);
+        // A streaming/online model (unlike WhisperEngine's offline one)
+        // decodes in chunks with left/right context. Without trailing
+        // silence, the last chunk can end up short of the lookahead it
+        // needs and never gets decoded at all — the last word just
+        // vanishes. sherpa-onnx's own reference for decoding a complete
+        // pre-recorded clip through a streaming model (python-api-examples/
+        // online-decode-files.py) pads ~0.66s of silence before
+        // `input_finished()` for exactly this reason.
+        stream.accept_waveform(16_000, &tail_padding());
         stream.input_finished();
         while recognizer.is_ready(&stream) {
             recognizer.decode(&stream);

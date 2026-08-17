@@ -8,6 +8,19 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
+  build: {
+    // Two entry points: the (currently unused, hidden) main window and
+    // the pill overlay (PROMPT.md §10 / M5), which lives under src/
+    // rather than at the root since it's not the app's main page. `vite
+    // build` only bundles what's listed here.
+    rollupOptions: {
+      input: {
+        index: "index.html",
+        pill: "src/pill.html",
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

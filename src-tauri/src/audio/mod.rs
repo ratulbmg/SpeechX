@@ -2,21 +2,29 @@ pub mod capture;
 pub mod resample;
 pub mod ring_buffer;
 
+use std::time::{Duration, Instant};
+
+use tauri::AppHandle;
 use tracing::{error, info, warn};
 
 use capture::CaptureSession;
 
 const DEBUG_WAV_PATH: &str = "/tmp/speechx_test.wav";
 
+/// PROMPT.md §10: "Throttle to ~30 Hz. Emitting per-buffer floods the IPC
+/// channel and gains nothing visible."
+const LEVEL_EMIT_INTERVAL: Duration = Duration::from_millis(33);
+
 /// Owns the (at most one — the chord machine enforces this) in-flight
 /// recording session.
 pub struct AudioController {
     session: Option<CaptureSession>,
+    app: AppHandle,
 }
 
 impl AudioController {
-    pub fn new() -> Self {
-        Self { session: None }
+    pub fn new(app: AppHandle) -> Self {
+        Self { session: None, app }
     }
 
     /// Begin buffering immediately — called on `RightCommand` key-down,
@@ -27,12 +35,13 @@ impl AudioController {
             return;
         }
         match CaptureSession::start() {
-            Ok(session) => {
+            Ok(mut session) => {
                 info!(
                     sample_rate = session.info.sample_rate,
                     channels = session.info.channels,
                     "audio capture started"
                 );
+                spawn_level_forwarder(session.take_level_rx(), self.app.clone());
                 self.session = Some(session);
             }
             Err(err) => error!(%err, "failed to start audio capture"),
@@ -69,10 +78,21 @@ impl AudioController {
     }
 }
 
-impl Default for AudioController {
-    fn default() -> Self {
-        Self::new()
-    }
+fn spawn_level_forwarder(level_rx: std::sync::mpsc::Receiver<f32>, app: AppHandle) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut last_emit = Instant::now() - LEVEL_EMIT_INTERVAL;
+        while let Ok(level) = level_rx.recv() {
+            let now = Instant::now();
+            if now.duration_since(last_emit) < LEVEL_EMIT_INTERVAL {
+                continue;
+            }
+            last_emit = now;
+            #[cfg(target_os = "macos")]
+            crate::overlay::panel::emit_audio_level(&app, level);
+            #[cfg(not(target_os = "macos"))]
+            let _ = (&app, level);
+        }
+    });
 }
 
 fn write_debug_wav(path: &str, raw_samples: &[f32], sample_rate: u32, channels: u16) -> std::io::Result<()> {

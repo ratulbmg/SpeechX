@@ -1,6 +1,6 @@
 [package]
 name = "speechx"
-version = "0.1.0"
+version = "1.0.0"
 description = "SpeechX — offline dictation for macOS"
 authors = ["Ratul"]
 edition = "2021"
@@ -49,6 +49,10 @@ strsim = "0.11"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
+# M5 — the pill overlay: a plain WebviewWindowBuilder window still steals
+# app focus on macOS. This wraps it as a non-activating NSPanel instead
+# (PROMPT.md §10 / hazard #1).
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
@@ -59,3 +63,16 @@ windows = { version = "0.58", features = [
     "Win32_System_Com",
 ] }
 winreg = "0.52"
+
+# `rdev` 0.5.3 (crates.io's latest, no newer version exists) crashes the
+# packaged .app on every keypress on macOS: it unconditionally computes a
+# typed-character string for each KeyPress via Carbon/HIToolbox Text Input
+# Source Manager calls, which macOS requires run on the main thread — but
+# this runs inside our hotkey listener's dedicated background thread
+# (necessarily, since `rdev::listen` blocks and our main thread is owned by
+# Tauri/AppKit's run loop). SpeechX never reads that string (only the key
+# and press/release direction), so `vendor/rdev-0.5.3` is a copy with just
+# that unused, crashing computation removed — see its
+# `src/macos/common.rs` for the exact patch.
+[patch.crates-io]
+rdev = { path = "vendor/rdev-0.5.3" }

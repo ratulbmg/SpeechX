@@ -23,7 +23,7 @@ tauri-build = { version = "2", features = [] }
 # gated behind the `macos-private-api` feature on macOS. We don't declare
 # it here: `tauri-nspanel`'s own dependency on `tauri` already enables it,
 # and Cargo unifies features across a build, so it's on regardless.
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
@@ -58,6 +58,12 @@ core-foundation = "0.10"
 # app focus on macOS. This wraps it as a non-activating NSPanel instead
 # (PROMPT.md §10 / hazard #1).
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
+# Dashboard's microphone-status check (permissions/macos.rs) — calls
+# AVCaptureDevice's authorizationStatusForMediaType: directly, since it's
+# the only read-only (non-prompting) way to query mic access. Already
+# resolved transitively at 0.6.4 via tauri-nspanel; declared directly
+# here too since we call it ourselves now, not just through that crate.
+objc2 = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [

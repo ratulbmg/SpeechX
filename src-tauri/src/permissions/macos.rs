@@ -22,6 +22,8 @@ use core_foundation::base::TCFType;
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
 use core_foundation::string::CFString;
+use objc2::runtime::AnyObject;
+use objc2::{class, msg_send};
 use tracing::info;
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -33,6 +35,18 @@ extern "C" {
 extern "C" {
     fn IOHIDRequestAccess(request_type: u32) -> u8;
 }
+
+// Apple's own exported NSString constant identifying the audio media
+// type, linked directly rather than hardcoded as a literal — its actual
+// string value ("soun", a legacy four-character-code) isn't something
+// worth risking a typo on when we can just reference the real symbol.
+#[link(name = "AVFoundation", kind = "framework")]
+extern "C" {
+    static AVMediaTypeAudio: *const AnyObject;
+}
+
+/// `AVAuthorizationStatus.authorized`, per AVFoundation's own enum.
+const AV_AUTHORIZATION_STATUS_AUTHORIZED: isize = 3;
 
 const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
 
@@ -64,4 +78,35 @@ pub fn ensure_input_monitoring() {
         granted = granted != 0,
         "input monitoring permission checked (prompts automatically if not yet decided)"
     );
+}
+
+/// Checks Accessibility access WITHOUT prompting — same underlying API
+/// as `ensure_accessibility`, but with the prompt option left out
+/// entirely (an empty options dict, same as passing NULL), so the
+/// dashboard can poll this on a timer without ever side-effecting a
+/// system dialog just from being open.
+pub fn accessibility_authorized() -> bool {
+    let options: CFDictionary<CFString, CFBoolean> = CFDictionary::from_CFType_pairs(&[]);
+    // SAFETY: same call as `ensure_accessibility`, just with an empty
+    // (still valid, non-null) options dictionary.
+    unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) != 0 }
+}
+
+/// Checks microphone access WITHOUT prompting. Unlike Accessibility,
+/// there's no C API for this — `AVCaptureDevice`'s
+/// `authorizationStatusForMediaType:` is the real (Objective-C) query
+/// API, and it's a pure read: opening a capture stream (what
+/// `audio::warm_up_microphone_permission` does) is the only thing that
+/// prompts.
+pub fn microphone_authorized() -> bool {
+    // SAFETY: `class!` resolves a real, always-present system class
+    // (AVFoundation is linked above); `AVMediaTypeAudio` is a valid,
+    // non-null NSString constant from that same framework;
+    // `authorizationStatusForMediaType:` is a pure query with no side
+    // effects, safe to call from any thread.
+    unsafe {
+        let cls = class!(AVCaptureDevice);
+        let status: isize = msg_send![cls, authorizationStatusForMediaType: AVMediaTypeAudio];
+        status == AV_AUTHORIZATION_STATUS_AUTHORIZED
+    }
 }

@@ -3,6 +3,7 @@ pub mod keymap;
 pub mod listener;
 
 use std::future::pending;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -35,7 +36,13 @@ fn read_active_language(lock: &Mutex<LanguageCode>) -> LanguageCode {
 /// Drives the chord state machine from real hotkey events. Dictate
 /// sessions run through ASR + text injection; Command sessions run
 /// through ASR + the language matcher and update `active_language`.
-pub async fn run(app: AppHandle) {
+///
+/// `listening_enabled` is the dashboard's "Listening" toggle
+/// (`commands::ListeningState`) — checked on every Right Command press so
+/// disabling it stops new sessions from arming. A session already
+/// in-flight when it flips off is left to finish normally; only the next
+/// press is blocked.
+pub async fn run(app: AppHandle, listening_enabled: Arc<AtomicBool>) {
     let mut rx = match listener::spawn_listener() {
         Ok(rx) => rx,
         Err(err) => {
@@ -75,7 +82,7 @@ pub async fn run(app: AppHandle) {
                     tracing::warn!("hotkey listener channel closed — stopping");
                     break;
                 };
-                handle_raw_event(raw, &mut machine, &mut arm_deadline, &mut audio, &active_language, &app);
+                handle_raw_event(raw, &mut machine, &mut arm_deadline, &mut audio, &active_language, &app, &listening_enabled);
             }
         }
     }
@@ -115,9 +122,13 @@ fn handle_raw_event(
     audio: &mut AudioController,
     active_language: &Arc<Mutex<LanguageCode>>,
     app: &AppHandle,
+    listening_enabled: &AtomicBool,
 ) {
     match raw {
         RawKeyEvent::Down(HotKey::RightCommand) => {
+            if !listening_enabled.load(Ordering::Relaxed) {
+                return;
+            }
             if let ChordOutcome::ArmStarted =
                 machine.on_event(ChordEvent::RightCommandDown { at_ms: now_ms() })
             {
@@ -222,7 +233,9 @@ fn spawn_dictate_pipeline(samples: Vec<f32>, active_language: Arc<Mutex<Language
                     engine = engine.id(),
                     "transcribed"
                 );
-                if let Err(err) = crate::inject::inject_text(&transcript.text) {
+                if is_only_bracketed_noise(&transcript.text) {
+                    info!(text = %transcript.text, "discarding hallucinated non-speech transcript");
+                } else if let Err(err) = crate::inject::inject_text(&transcript.text) {
                     tracing::error!(?err, "text injection failed");
                 }
             }
@@ -230,6 +243,54 @@ fn spawn_dictate_pipeline(samples: Vec<f32>, active_language: Arc<Mutex<Language
         }
         hide_pill(&app);
     });
+}
+
+/// Whisper hallucinates bracketed non-speech labels (`[Music]`,
+/// `[Applause]`, `[BLANK_AUDIO]`, ...) instead of returning nothing when
+/// the recorded audio is near-silent or just ambient noise — e.g. an
+/// accidental Right Command tap-and-release that's long enough to escape
+/// the arm window's `AccidentalTap` discard, but catches no real speech.
+/// True when `text` is made up of nothing but one or more such bracketed
+/// tokens, with no real content outside them — that's never something
+/// worth injecting into whatever app has focus.
+fn is_only_bracketed_noise(text: &str) -> bool {
+    let mut outside_brackets = String::new();
+    let mut depth = 0u32;
+    for c in text.chars() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => outside_brackets.push(c),
+            _ => {}
+        }
+    }
+    !text.trim().is_empty() && outside_brackets.trim().is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_bracketed_only_hallucinations() {
+        assert!(is_only_bracketed_noise("[Music]"));
+        assert!(is_only_bracketed_noise("[Music][Music][Band Warms Up][Music][Bell]"));
+        assert!(is_only_bracketed_noise("  [Applause]  "));
+    }
+
+    #[test]
+    fn keeps_real_speech_even_with_brackets_in_it() {
+        assert!(!is_only_bracketed_noise("turn on the lights [laughs]"));
+        assert!(!is_only_bracketed_noise("hello world"));
+    }
+
+    #[test]
+    fn empty_text_is_not_flagged_as_noise() {
+        // Handled separately upstream (Err(AsrError::Empty)) — this just
+        // documents that an empty string isn't itself "bracketed noise".
+        assert!(!is_only_bracketed_noise(""));
+        assert!(!is_only_bracketed_noise("   "));
+    }
 }
 
 /// Runs ASR + the fuzzy language matcher on a blocking thread, then

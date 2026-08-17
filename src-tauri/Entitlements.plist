@@ -7,6 +7,11 @@
     <key>com.apple.security.device.audio-input</key>
     <true/>
 
+    <!-- AppleScript/system-events automation, needed for text injection
+         into other apps. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+
     <!-- ONNX Runtime (via sherpa-onnx) needs these three under the
          hardened runtime required for notarization — without them it
          crashes on first inference on a signed+notarized build. Unverified

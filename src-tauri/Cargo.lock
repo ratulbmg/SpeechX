@@ -3788,7 +3788,7 @@ dependencies = [
 
 [[package]]
 name = "speechx"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.1",

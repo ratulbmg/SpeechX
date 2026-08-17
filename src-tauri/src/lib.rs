@@ -75,14 +75,29 @@ pub fn run() {
             // install. Blocking (waits for CoreAudio, and however long
             // the user takes to answer the dialog), so it runs on its
             // own thread rather than holding up the rest of setup().
-            tauri::async_runtime::spawn_blocking(audio::warm_up_microphone_permission);
+            //
+            // The hotkey listener is deliberately started only *after*
+            // this finishes, not in parallel with it: if the user hits
+            // the hotkey while the warm-up's own mic request is still
+            // waiting on their click, `AudioController::start` opens a
+            // second, concurrent CoreAudio input stream that races the
+            // same not-yet-decided TCC (permission) request. Two
+            // simultaneous negotiations for the same not-yet-granted
+            // permission is what makes the system dialog appear to loop
+            // / re-ask instead of sticking after the first "Allow" —
+            // finishing the warm-up first means the decision is already
+            // settled before a hotkey press can trigger a second attempt.
+            let hotkey_app = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                audio::warm_up_microphone_permission();
+                tauri::async_runtime::spawn(hotkey::run(hotkey_app));
+            });
 
             // The pill overlay (PROMPT.md §10 / M5): built once, hidden,
             // then shown/hidden per dictation session by the hotkey loop.
             #[cfg(target_os = "macos")]
             overlay::panel::create(app.handle())?;
 
-            tauri::async_runtime::spawn(hotkey::run(app.handle().clone()));
             // Load + warm the command-recognition engine and both
             // dictation engines (English/Whisper, Bengali/Zipformer) up
             // front, so no first use — dictation or language switch —

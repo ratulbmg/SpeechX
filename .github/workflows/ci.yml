@@ -1,13 +1,24 @@
 name: CI
 
 # Runs on:
-#   - every push to develop
-#   - every pull request targeting main or develop
+#   - every pull request targeting main or develop (covers opening a PR,
+#     and every subsequent push to that PR's branch)
+#   - a direct push straight to main (rare — main is protected — but a
+#     safety net for anything that lands there without a PR)
+#
+# Deliberately NOT "push to develop" as well: develop is usually the
+# source branch of an open PR (into main), and GitHub fires both a
+# `push` event and a `pull_request` (synchronize) event for the same
+# commit in that case — `concurrency` below can't dedupe across them,
+# since push uses `refs/heads/develop` as its ref and pull_request uses
+# `refs/pull/<n>/merge`, so it silently ran the whole workflow twice.
+# `pull_request` alone covers develop just as well in practice.
+#
 # Does NOT run on tag pushes (release.yml handles those)
 on:
   push:
     branches:
-      - develop
+      - main
   pull_request:
     branches:
       - main

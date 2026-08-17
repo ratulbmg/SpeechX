@@ -1,100 +1,155 @@
 name: Release
 
+# Runs ONLY when a version tag is pushed.
+# Examples that trigger it:  v0.1.0  v1.2.3  v2.0.0-beta
+# A normal push to main does NOT trigger this.
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
+
+# Required so the workflow can create a GitHub Release.
+permissions:
+  contents: write
 
 jobs:
-  build-macos:
-    runs-on: macos-15 # Sequoia runner, has Xcode 16
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Install Rust
+  build-macos:
+    name: Build macOS Universal
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
       - name: Install Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: "npm"
+          node-version: '20'
+          cache: 'npm'
 
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build universal binary
+      - name: Build universal macOS binary
         env:
-          MACOSX_DEPLOYMENT_TARGET: "11.0"
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
         run: npm run tauri build -- --target universal-apple-darwin
 
-      - name: Verify universal binary
+      - name: Verify binary contains both architectures
         run: |
-          lipo -info \
-            "src-tauri/target/universal-apple-darwin/release/bundle/macos/SpeechX.app/Contents/MacOS/speechx"
+          BINARY=$(find src-tauri/target/universal-apple-darwin/release/bundle/macos \
+                   -name "*" -type f -perm +111 -path "*/Contents/MacOS/*" | head -1)
+          echo "Checking: $BINARY"
+          lipo -info "$BINARY"
+          lipo -info "$BINARY" | grep -q "x86_64" || (echo "MISSING x86_64 slice" && exit 1)
+          lipo -info "$BINARY" | grep -q "arm64"  || (echo "MISSING arm64 slice"  && exit 1)
+          echo "Universal binary verified."
 
-      # Signing/notarization needs a paid Apple Developer account. Add these
-      # repo secrets and uncomment to enable it:
-      #   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
-      #   APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_TEAM_ID,
-      #   APPLE_APP_SPECIFIC_PASSWORD
-      # - name: Sign and notarize
-      #   env:
-      #     APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      #     APPLE_ID: ${{ secrets.APPLE_ID }}
-      #     APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      #     APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      #   run: ./scripts/release.sh
-
-      - name: Upload DMG
+      - name: Upload macOS DMG
         uses: actions/upload-artifact@v4
         with:
-          name: SpeechX-universal-dmg
+          name: macos-build
           path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
 
   build-windows:
+    name: Build Windows Installers
     runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Install Rust
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
       - name: Install Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: "npm"
+          node-version: '20'
+          cache: 'npm'
 
       - name: Install npm dependencies
         run: npm ci
 
-      # No manual sherpa-onnx download needed — the `sherpa-onnx` crate's
-      # own build.rs downloads the matching prebuilt static lib for
-      # win-x64 automatically (same as it does for macOS).
       - name: Build Windows installers
         run: npm run tauri build
 
-      - name: Upload installers
+      - name: Upload Windows installers
         uses: actions/upload-artifact@v4
         with:
-          name: SpeechX-windows
+          name: windows-build
           path: |
-            src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
 
-      - name: Attach to GitHub Release
+  publish:
+    name: Publish GitHub Release
+    # Waits for BOTH builds. If either fails, no release is published.
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download macOS build
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-build
+          path: ./dist
+
+      - name: Download Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: ./dist
+
+      - name: List files being released
+        run: ls -lah ./dist
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
+          name: SpeechX ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## SpeechX ${{ github.ref_name }}
+
+            Offline dictation for macOS and Windows.
+            English, Hindi, and Bengali. Fully offline — nothing leaves your machine.
+
+            ### Downloads
+
+            | Platform | File | Supports |
+            |---|---|---|
+            | macOS | `.dmg` | M1–M5 and Intel, macOS 11+ |
+            | Windows | `.exe` | Intel i3–i9 and AMD, Windows 10/11 |
+
+            ### macOS install note
+            The app is not yet notarized by Apple. On first launch:
+            right-click the app → **Open** → **Open**. macOS remembers after that.
+
+            ### Windows install note
+            Some antivirus software flags apps that use global hotkeys.
+            This is a known false positive for this category of application.
+          files: ./dist/*

@@ -78,6 +78,26 @@ impl AudioController {
     }
 }
 
+/// Briefly opens then immediately closes an input stream, purely to
+/// trigger the OS microphone-permission prompt at launch instead of
+/// waiting for the user's first real hotkey press — that's a confusing
+/// moment for a system dialog to interrupt mid-recording. Mirrors what
+/// `permissions::macos::ensure_accessibility`/`ensure_input_monitoring`
+/// already do for their own permissions, so all three prompts land
+/// together right after install instead of trickling in over first use.
+/// Non-fatal if it fails (no mic, denied, or — on Windows — the privacy
+/// toggle being off): the real error still surfaces on first actual use,
+/// this is just trying to get ahead of it.
+pub fn warm_up_microphone_permission() {
+    match CaptureSession::start() {
+        Ok(session) => {
+            let _ = session.stop();
+            info!("microphone permission warmup: input stream opened and closed cleanly");
+        }
+        Err(err) => warn!(%err, "microphone permission warmup failed (non-fatal — will retry on first real use)"),
+    }
+}
+
 fn spawn_level_forwarder(level_rx: std::sync::mpsc::Receiver<f32>, app: AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         let mut last_emit = Instant::now() - LEVEL_EMIT_INTERVAL;

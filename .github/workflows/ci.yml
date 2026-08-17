@@ -64,6 +64,17 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # tauri.conf.json bundles these models into the app (bundle.resources)
+      # so a downloaded .app works standalone. They're gitignored (large
+      # binaries), so anything that touches the Rust build needs them
+      # fetched first — and that's not just the final `tauri build` below:
+      # Tauri's build script validates every bundle.resources path exists
+      # on *every* cargo invocation, including `cargo clippy` and
+      # `cargo fmt --check`'s underlying compile step. This has to run
+      # before those, not just before the build step, or they fail first.
+      - name: Download ASR models
+        run: ./scripts/download_models.sh
+
       - name: Type-check frontend
         run: npx tsc --noEmit
 
@@ -76,13 +87,6 @@ jobs:
         working-directory: ./src-tauri
         run: cargo clippy --all-targets -- -D warnings
         continue-on-error: true   # set to false once the codebase is clippy-clean
-
-      # tauri.conf.json bundles these models into the app (bundle.resources)
-      # so a downloaded .app works standalone. They're gitignored (large
-      # binaries), so `tauri build` needs them fetched first — see the
-      # script for exactly where they come from.
-      - name: Download ASR models
-        run: ./scripts/download_models.sh
 
       - name: Build macOS app (native arch only — fast)
         env:

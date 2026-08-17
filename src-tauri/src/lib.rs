@@ -2,19 +2,20 @@
 
 mod asr;
 mod audio;
+mod commands;
 mod config;
 mod hotkey;
 mod inject;
 mod lang;
 mod overlay;
 mod permissions;
+mod tray;
 
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
+use tauri::Manager;
 use tracing_subscriber::EnvFilter;
-
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -32,8 +33,9 @@ pub fn run() {
         // starts a second global hotkey listener and a second dictation
         // pipeline. Both fire on the same keypress and both inject text,
         // which is exactly what produces duplicated output.
-        .plugin(tauri_plugin_single_instance::init(|_app, args, cwd| {
-            tracing::warn!(?args, ?cwd, "a second SpeechX instance tried to start — ignoring it, this one keeps running");
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            tracing::info!(?args, ?cwd, "second launch attempt — showing the existing dashboard instead");
+            tray::show_dashboard(app);
         }))
         .plugin(tauri_plugin_opener::init());
     #[cfg(target_os = "macos")]
@@ -41,8 +43,13 @@ pub fn run() {
         builder = builder.plugin(tauri_nspanel::init());
     }
 
+    // Dashboard-controlled master switch (src/App.tsx's "Listening"
+    // toggle) — read by the hotkey loop on every Right Command press.
+    let listening_enabled = Arc::new(AtomicBool::new(true));
+
     builder
-        .setup(|app| {
+        .manage(commands::ListeningState::new(listening_enabled.clone()))
+        .setup(move |app| {
             // SpeechX is meant to run as a background/menu-bar utility
             // (PROMPT.md §1) — without this, Tauri defaults to
             // `NSApplicationActivationPolicyRegular`, a normal foreground
@@ -57,41 +64,41 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.handle().set_activation_policy(tauri::ActivationPolicy::Accessory)?;
 
-            // Trigger the Accessibility / Input Monitoring system prompts
-            // up front rather than letting the hotkey listener silently
-            // receive nothing if they're not yet granted (see
-            // `permissions::macos`'s doc comment).
-            #[cfg(target_os = "macos")]
-            {
-                permissions::macos::ensure_accessibility();
-                permissions::macos::ensure_input_monitoring();
+            // With no Dock icon, the menu bar icon (`tray.rs`) is the only
+            // permanent way back into the dashboard, so its "Open
+            // Dashboard" item (and a second launch attempt via the
+            // single-instance handler above) both need the window to
+            // still exist, not just be closed. The red traffic-light
+            // button's default behavior is to *destroy* the window, which
+            // would leave both of those with nothing to show — so the
+            // close button is intercepted here to hide it instead. The
+            // background process (hotkey listener, etc.) was already
+            // unaffected by closing the window either way; this just
+            // makes the window itself recoverable too.
+            if let Some(window) = app.get_webview_window("main") {
+                let window_to_hide = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = window_to_hide.hide();
+                    }
+                });
             }
+            tray::create(app.handle())?;
 
-            // Same idea for the microphone prompt: without this, it only
-            // fires the first time the user actually holds the hotkey —
-            // a confusing moment for a permission dialog to interrupt.
-            // Opening (then immediately closing) a stream at launch
-            // brings all three permission prompts together right after
-            // install. Blocking (waits for CoreAudio, and however long
-            // the user takes to answer the dialog), so it runs on its
-            // own thread rather than holding up the rest of setup().
-            //
-            // The hotkey listener is deliberately started only *after*
-            // this finishes, not in parallel with it: if the user hits
-            // the hotkey while the warm-up's own mic request is still
-            // waiting on their click, `AudioController::start` opens a
-            // second, concurrent CoreAudio input stream that races the
-            // same not-yet-decided TCC (permission) request. Two
-            // simultaneous negotiations for the same not-yet-granted
-            // permission is what makes the system dialog appear to loop
-            // / re-ask instead of sticking after the first "Allow" —
-            // finishing the warm-up first means the decision is already
-            // settled before a hotkey press can trigger a second attempt.
+            // Accessibility / Input Monitoring / Microphone are requested
+            // on demand from the dashboard's Permissions tab
+            // (`commands::request_accessibility_permission`,
+            // `commands::request_microphone_permission`), not
+            // automatically here — installing or launching SpeechX should
+            // never itself trigger a system permission dialog. Until the
+            // user grants Accessibility, the hotkey listener below just
+            // sits retrying in the background (see `listener.rs`'s
+            // documented backoff loop); it starts working within seconds
+            // of the grant, whenever that happens.
             let hotkey_app = app.handle().clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                audio::warm_up_microphone_permission();
-                tauri::async_runtime::spawn(hotkey::run(hotkey_app));
-            });
+            let hotkey_listening_enabled = listening_enabled.clone();
+            tauri::async_runtime::spawn(hotkey::run(hotkey_app, hotkey_listening_enabled));
 
             // The pill overlay (PROMPT.md §10 / M5): built once, hidden,
             // then shown/hidden per dictation session by the hotkey loop.
@@ -122,7 +129,15 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            commands::check_microphone_permission,
+            commands::check_accessibility_permission,
+            commands::request_accessibility_permission,
+            commands::request_microphone_permission,
+            commands::get_listening_enabled,
+            commands::set_listening_enabled,
+            commands::quit_app,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

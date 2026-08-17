@@ -7,5 +7,14 @@
          merged into the Tauri-generated Info.plist automatically. -->
     <key>NSMicrophoneUsageDescription</key>
     <string>SpeechX needs microphone access to transcribe what you say into text.</string>
+
+    <key>NSAccessibilityUsageDescription</key>
+    <string>SpeechX needs Accessibility access to type transcribed text into other apps.</string>
+
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>SpeechX needs Input Monitoring access to detect the Right Command and Right Option keys globally.</string>
+
+    <key>LSRequiresCarbon</key>
+    <false/>
 </dict>
 </plist>

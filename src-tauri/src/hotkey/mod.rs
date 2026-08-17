@@ -83,7 +83,10 @@ pub async fn run(app: AppHandle) {
 
 /// Looks up the active language's native-script display name (e.g.
 /// `বাংলা`) for the pill label — falls back to the code itself if
-/// `languages.toml` somehow doesn't have an entry for it.
+/// `languages.toml` somehow doesn't have an entry for it. Only called
+/// from `show_pill`'s macOS branch below — the Windows pill isn't wired
+/// up yet, so this has no caller (and would be genuine dead code) there.
+#[cfg(target_os = "macos")]
 fn active_language_native(active_language: &Arc<Mutex<LanguageCode>>) -> String {
     let code = read_active_language(active_language);
     crate::lang::registry::enabled()
@@ -209,7 +212,6 @@ fn spawn_dictate_pipeline(samples: Vec<f32>, active_language: Arc<Mutex<Language
         use crate::asr::engine::AsrOptions;
         let opts = AsrOptions {
             language_hint: Some(language),
-            ..Default::default()
         };
         match engine.transcribe(&samples, &opts) {
             Ok(transcript) => {

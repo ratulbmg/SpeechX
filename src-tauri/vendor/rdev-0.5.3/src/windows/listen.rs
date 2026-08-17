@@ -17,6 +17,14 @@ impl From<HookError> for ListenError {
     }
 }
 
+// Original rdev code, predating this lint (stabilized after rdev 0.5.3
+// was published) — same pattern already silenced on the macOS side (see
+// macos/listen.rs), for the same reason: not touching the access pattern
+// itself, only the lint, to keep this vendored fork narrowly scoped to
+// the one real fix it exists for (see macos/common.rs's SpeechX patch
+// comment — this Windows file isn't part of that fix at all, but shares
+// the same now-outdated `static mut` callback pattern).
+#[allow(static_mut_refs)]
 unsafe extern "system" fn raw_callback(code: c_int, param: WPARAM, lpdata: LPARAM) -> LRESULT {
     if code == HC_ACTION {
         let opt = convert(param, lpdata);

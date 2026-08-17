@@ -77,6 +77,13 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
         continue-on-error: true   # set to false once the codebase is clippy-clean
 
+      # tauri.conf.json bundles these models into the app (bundle.resources)
+      # so a downloaded .app works standalone. They're gitignored (large
+      # binaries), so `tauri build` needs them fetched first — see the
+      # script for exactly where they come from.
+      - name: Download ASR models
+        run: ./scripts/download_models.sh
+
       - name: Build macOS app (native arch only — fast)
         env:
           MACOSX_DEPLOYMENT_TARGET: '11.0'
@@ -111,6 +118,10 @@ jobs:
 
       - name: Install npm dependencies
         run: npm ci
+
+      - name: Download ASR models
+        shell: bash
+        run: ./scripts/download_models.sh
 
       - name: Build Windows app
         run: npm run tauri build

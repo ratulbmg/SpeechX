@@ -2,19 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
+// Windows uses Right Alt; macOS uses Right ⌘. Detected at runtime so the
+// same binary works on both platforms without a rebuild.
+const TRIGGER_KEY = navigator.userAgent.includes("Windows") ? "Right Alt" : "Right ⌘";
+
 type PermissionState = "checking" | "granted" | "denied";
 
-// Re-checked on a timer while the dashboard is open: granting a
-// permission happens in a *separate* System Settings window, so this is
-// how the button notices it turned green without the user having to
-// come back and manually refresh anything.
 const POLL_INTERVAL_MS = 2000;
 
 interface PermissionRowProps {
   label: string;
   state: PermissionState;
   onRequest: () => void;
-  /** True when a prerequisite permission isn't granted yet — e.g. Microphone waits on Accessibility. */
   locked?: boolean;
   lockedLabel?: string;
 }
@@ -54,8 +53,8 @@ function ListeningToggle({ enabled, onChange }: ListeningToggleProps) {
         <span className="toggle-label">Listening</span>
         <span className="toggle-description">
           {checked
-            ? "Right ⌘ arms dictation."
-            : "Right ⌘ is ignored until re-enabled."}
+            ? `${TRIGGER_KEY} arms dictation.`
+            : `${TRIGGER_KEY} is ignored until re-enabled.`}
         </span>
       </div>
       <button
@@ -79,9 +78,6 @@ function App() {
   const [mic, setMic] = useState<PermissionState>("checking");
   const [accessibility, setAccessibility] = useState<PermissionState>("checking");
   const [listening, setListening] = useState<boolean | null>(null);
-  // Avoids setting state after the component's gone — StrictMode's
-  // dev-mode double-mount otherwise leaves a stray interval briefly
-  // updating an unmounted instance.
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -116,7 +112,7 @@ function App() {
     <main className="dashboard">
       <h1>SpeechX</h1>
       <p className="subtitle">
-        Hold <kbd>Right ⌘</kbd> to dictate.
+        Hold <kbd>{TRIGGER_KEY}</kbd> to dictate.
       </p>
 
       <div className="tab-bar" role="tablist">

@@ -88,12 +88,9 @@ pub async fn run(app: AppHandle, listening_enabled: Arc<AtomicBool>) {
     }
 }
 
-/// Looks up the active language's native-script display name (e.g.
-/// `বাংলা`) for the pill label — falls back to the code itself if
-/// `languages.toml` somehow doesn't have an entry for it. Only called
-/// from `show_pill`'s macOS branch below — the Windows pill isn't wired
-/// up yet, so this has no caller (and would be genuine dead code) there.
-#[cfg(target_os = "macos")]
+/// Looks up the active language's native-script display name (e.g. `বাংলা`)
+/// for the pill label — falls back to the code itself if `languages.toml`
+/// somehow doesn't have an entry for it.
 fn active_language_native(active_language: &Arc<Mutex<LanguageCode>>) -> String {
     let code = read_active_language(active_language);
     crate::lang::registry::enabled()
@@ -113,7 +110,13 @@ fn show_pill(app: &AppHandle, mode: Mode, active_language: &Arc<Mutex<LanguageCo
 }
 
 #[cfg(not(target_os = "macos"))]
-fn show_pill(_app: &AppHandle, _mode: Mode, _active_language: &Arc<Mutex<LanguageCode>>) {}
+fn show_pill(app: &AppHandle, mode: Mode, active_language: &Arc<Mutex<LanguageCode>>) {
+    let label = match mode {
+        Mode::Dictate => active_language_native(active_language),
+        Mode::Command => "Say a language\u{2026}".to_string(),
+    };
+    crate::overlay::pill_windows::emit_show(app, mode, &label);
+}
 
 fn handle_raw_event(
     raw: RawKeyEvent,
@@ -161,6 +164,8 @@ fn handle_raw_event(
                 audio.discard();
                 #[cfg(target_os = "macos")]
                 crate::overlay::panel::emit_cancelled(app);
+                #[cfg(not(target_os = "macos"))]
+                crate::overlay::pill_windows::emit_cancelled(app);
             }
         }
         RawKeyEvent::Up(HotKey::Escape) => {}
@@ -178,6 +183,8 @@ fn handle_session_end(
             if let Some(samples) = audio.finish() {
                 #[cfg(target_os = "macos")]
                 crate::overlay::panel::emit_transcribing(app);
+                #[cfg(not(target_os = "macos"))]
+                crate::overlay::pill_windows::emit_transcribing(app);
                 spawn_dictate_pipeline(samples, active_language.clone(), app.clone());
             }
         }
@@ -185,6 +192,8 @@ fn handle_session_end(
             if let Some(samples) = audio.finish() {
                 #[cfg(target_os = "macos")]
                 crate::overlay::panel::emit_transcribing(app);
+                #[cfg(not(target_os = "macos"))]
+                crate::overlay::pill_windows::emit_transcribing(app);
                 spawn_command_pipeline(samples, active_language.clone(), app.clone());
             }
         }
@@ -203,7 +212,9 @@ fn hide_pill(app: &AppHandle) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn hide_pill(_app: &AppHandle) {}
+fn hide_pill(app: &AppHandle) {
+    crate::overlay::pill_windows::emit_hide(app);
+}
 
 /// Runs ASR + injection on a blocking thread so the hotkey loop stays
 /// responsive to the next key-down while a transcription is in flight.
@@ -341,7 +352,7 @@ fn spawn_command_pipeline(samples: Vec<f32>, active_language: Arc<Mutex<Language
                 #[cfg(target_os = "macos")]
                 crate::overlay::panel::emit_matched(&app, &native);
                 #[cfg(not(target_os = "macos"))]
-                let _ = native;
+                crate::overlay::pill_windows::emit_matched(&app, &native);
             }
             MatchResult::Ambiguous(a, b) => {
                 info!(?a, ?b, "ambiguous language match — no picker UI yet (M6 pill work), keeping current language");

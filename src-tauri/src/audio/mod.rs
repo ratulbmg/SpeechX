@@ -2,12 +2,15 @@ pub mod capture;
 pub mod resample;
 pub mod ring_buffer;
 
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
 use tracing::{error, info, warn};
 
 use capture::CaptureSession;
+
+pub use capture::list_input_device_names;
 
 const DEBUG_WAV_PATH: &str = "/tmp/speechx_test.wav";
 
@@ -20,11 +23,19 @@ const LEVEL_EMIT_INTERVAL: Duration = Duration::from_millis(33);
 pub struct AudioController {
     session: Option<CaptureSession>,
     app: AppHandle,
+    /// The dashboard's microphone picker (`commands::SelectedMicrophone`)
+    /// — read fresh on every `start()`, so switching microphones mid-use
+    /// (no restart needed) takes effect from the very next session.
+    selected_microphone: Arc<Mutex<Option<String>>>,
 }
 
 impl AudioController {
-    pub fn new(app: AppHandle) -> Self {
-        Self { session: None, app }
+    pub fn new(app: AppHandle, selected_microphone: Arc<Mutex<Option<String>>>) -> Self {
+        Self {
+            session: None,
+            app,
+            selected_microphone,
+        }
     }
 
     /// Begin buffering immediately — called on `RightCommand` key-down,
@@ -34,7 +45,12 @@ impl AudioController {
             warn!("audio capture already running — ignoring duplicate start");
             return;
         }
-        match CaptureSession::start() {
+        let device_name = self
+            .selected_microphone
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        match CaptureSession::start(device_name.as_deref()) {
             Ok(mut session) => {
                 info!(
                     sample_rate = session.info.sample_rate,
@@ -89,7 +105,7 @@ impl AudioController {
 /// toggle being off): the real error still surfaces on first actual use,
 /// this is just trying to get ahead of it.
 pub fn warm_up_microphone_permission() {
-    match CaptureSession::start() {
+    match CaptureSession::start(None) {
         Ok(session) => {
             let _ = session.stop();
             info!("microphone permission warmup: input stream opened and closed cleanly");

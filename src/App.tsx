@@ -8,8 +8,9 @@ import "./App.css";
 const IS_WINDOWS = navigator.userAgent.includes("Windows");
 const TRIGGER_KEY = IS_WINDOWS ? "Right Alt" : "Right ⌘";
 
-// Manual fallback steps for when a permission's automatic "Grant Access"
-// flow doesn't do anything visible (see MANUAL_PERMISSIONS.md — Input
+// Manual fallback steps for when a permission's automatic prompt (fired
+// once at launch — see `onboard_permissions_sequentially` in lib.rs)
+// doesn't do anything visible (see MANUAL_PERMISSIONS.md — Input
 // Monitoring especially has a known macOS quirk where its system prompt
 // can silently fail to appear). macOS-only: Windows has no equivalent
 // permission system to walk through manually (see check_accessibility_
@@ -36,20 +37,14 @@ const FAST_POLL_DURATION_MS = 8000;
 interface PermissionRowProps {
   label: string;
   state: PermissionState;
-  onRequest: () => void;
-  locked?: boolean;
-  lockedLabel?: string;
   manualLinkAnchor?: string;
 }
 
-function PermissionRow({
-  label,
-  state,
-  onRequest,
-  locked,
-  lockedLabel,
-  manualLinkAnchor,
-}: PermissionRowProps) {
+// Pure status display — no button, nothing to click. Permissions are now
+// requested automatically, one at a time, at launch (see
+// `onboard_permissions_sequentially` in lib.rs); this row exists only to
+// show whether each one has actually been granted.
+function PermissionRow({ label, state, manualLinkAnchor }: PermissionRowProps) {
   const granted = state === "granted";
   return (
     <div className="permission-row">
@@ -64,19 +59,9 @@ function PermissionRow({
           </button>
         )}
       </div>
-      <button
-        className={granted ? "permission-button granted" : "permission-button"}
-        disabled={granted || state === "checking" || locked}
-        onClick={onRequest}
-      >
-        {granted
-          ? "✓ Granted"
-          : locked
-            ? lockedLabel
-            : state === "checking"
-              ? "Checking…"
-              : "Grant Access"}
-      </button>
+      <span className={granted ? "permission-status granted" : "permission-status"}>
+        {granted ? "Granted" : state === "checking" ? "Checking…" : "Not granted"}
+      </span>
     </div>
   );
 }
@@ -112,6 +97,40 @@ function ListeningToggle({ enabled, onChange }: ListeningToggleProps) {
   );
 }
 
+interface MicrophoneSelectorProps {
+  devices: string[];
+  selected: string | null;
+  onChange: (device: string | null) => void;
+}
+
+// `null` means "System Default" — whatever the OS currently treats as
+// the default input device, tracked live rather than pinned to whichever
+// one happened to be default when the user last opened the dashboard.
+const SYSTEM_DEFAULT_VALUE = "";
+
+function MicrophoneSelector({ devices, selected, onChange }: MicrophoneSelectorProps) {
+  return (
+    <div className="mic-row">
+      <div className="toggle-text">
+        <span className="toggle-label">Microphone</span>
+        <span className="toggle-description">Input device dictation records from.</span>
+      </div>
+      <select
+        className="mic-select"
+        value={selected ?? SYSTEM_DEFAULT_VALUE}
+        onChange={(e) => onChange(e.target.value === SYSTEM_DEFAULT_VALUE ? null : e.target.value)}
+      >
+        <option value={SYSTEM_DEFAULT_VALUE}>System Default</option>
+        {devices.map((device) => (
+          <option key={device} value={device}>
+            {device}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 type Tab = "controls" | "permissions";
 
 function App() {
@@ -120,6 +139,8 @@ function App() {
   const [accessibility, setAccessibility] = useState<PermissionState>("checking");
   const [inputMonitoring, setInputMonitoring] = useState<PermissionState>("checking");
   const [listening, setListening] = useState<boolean | null>(null);
+  const [microphones, setMicrophones] = useState<string[]>([]);
+  const [selectedMic, setSelectedMic] = useState<string | null>(null);
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -128,17 +149,22 @@ function App() {
     let timer: ReturnType<typeof setTimeout>;
 
     const checkAll = async () => {
-      const [micGranted, axGranted, inputMonitoringGranted, listeningEnabled] = await Promise.all([
-        invoke<boolean>("check_microphone_permission"),
-        invoke<boolean>("check_accessibility_permission"),
-        invoke<boolean>("check_input_monitoring_permission"),
-        invoke<boolean>("get_listening_enabled"),
-      ]);
+      const [micGranted, axGranted, inputMonitoringGranted, listeningEnabled, deviceList, selectedDevice] =
+        await Promise.all([
+          invoke<boolean>("check_microphone_permission"),
+          invoke<boolean>("check_accessibility_permission"),
+          invoke<boolean>("check_input_monitoring_permission"),
+          invoke<boolean>("get_listening_enabled"),
+          invoke<string[]>("list_microphones"),
+          invoke<string | null>("get_selected_microphone"),
+        ]);
       if (!mounted.current) return;
       setMic(micGranted ? "granted" : "denied");
       setAccessibility(axGranted ? "granted" : "denied");
       setInputMonitoring(inputMonitoringGranted ? "granted" : "denied");
       setListening(listeningEnabled);
+      setMicrophones(deviceList);
+      setSelectedMic(selectedDevice);
 
       const stillWarmingUp = Date.now() - mountedAt < FAST_POLL_DURATION_MS;
       timer = setTimeout(checkAll, stillWarmingUp ? FAST_POLL_INTERVAL_MS : POLL_INTERVAL_MS);
@@ -154,6 +180,11 @@ function App() {
   const toggleListening = (next: boolean) => {
     setListening(next);
     invoke("set_listening_enabled", { enabled: next });
+  };
+
+  const changeMicrophone = (device: string | null) => {
+    setSelectedMic(device);
+    invoke("set_selected_microphone", { name: device });
   };
 
   return (
@@ -183,42 +214,33 @@ function App() {
       </div>
 
       <div className="tab-panel">
-        {tab === "controls" && <ListeningToggle enabled={listening} onChange={toggleListening} />}
+        {tab === "controls" && (
+          <>
+            <ListeningToggle enabled={listening} onChange={toggleListening} />
+            <MicrophoneSelector devices={microphones} selected={selectedMic} onChange={changeMicrophone} />
+          </>
+        )}
 
         {tab === "permissions" && (
           <>
             <div className="permission-list">
               {!IS_WINDOWS && (
-                <PermissionRow
-                  label="Accessibility"
-                  state={accessibility}
-                  onRequest={() => invoke("request_accessibility_permission")}
-                  manualLinkAnchor="accessibility"
-                />
+                <PermissionRow label="Accessibility" state={accessibility} manualLinkAnchor="accessibility" />
               )}
               {!IS_WINDOWS && (
                 <PermissionRow
                   label="Input Monitoring"
                   state={inputMonitoring}
-                  locked={accessibility !== "granted"}
-                  lockedLabel="Grant Accessibility first"
-                  onRequest={() => invoke("request_input_monitoring_permission")}
                   manualLinkAnchor="input-monitoring"
                 />
               )}
-              <PermissionRow
-                label="Microphone"
-                state={mic}
-                locked={accessibility !== "granted" || inputMonitoring !== "granted"}
-                lockedLabel="Grant steps above first"
-                onRequest={() => invoke("request_microphone_permission")}
-                manualLinkAnchor="microphone"
-              />
+              <PermissionRow label="Microphone" state={mic} manualLinkAnchor="microphone" />
             </div>
 
             <p className="hint">
-              Granting a permission may require quitting and reopening SpeechX once before it
-              takes effect.
+              SpeechX asks for these automatically, one at a time, when it first launches. If one
+              shows "Not granted", use the manual steps link above or quit and reopen SpeechX
+              once after granting it in System Settings.
             </p>
           </>
         )}

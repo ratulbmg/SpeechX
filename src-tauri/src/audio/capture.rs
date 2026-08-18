@@ -18,6 +18,40 @@ pub struct StreamInfo {
     pub channels: u16,
 }
 
+/// Every input device name `cpal` currently reports — the same call on
+/// macOS and Windows, since `cpal` abstracts CoreAudio vs WASAPI itself.
+/// Used to populate the dashboard's microphone picker (useful whenever a
+/// user has more than one input available, e.g. a headset mic alongside
+/// the built-in one, and wants dictation to use a specific one rather
+/// than whatever the OS currently calls "default").
+pub fn list_input_device_names() -> Vec<String> {
+    let host = cpal::default_host();
+    match host.input_devices() {
+        Ok(devices) => devices.filter_map(|d| d.name().ok()).collect(),
+        Err(err) => {
+            error!(?err, "failed to enumerate input devices");
+            Vec::new()
+        }
+    }
+}
+
+/// Resolves the device to actually capture from. `None` (no selection
+/// made) or a name that no longer matches any present device (the user
+/// unplugged it since choosing it) both fall back to the system default
+/// — never a hard error, since losing the previously-picked device
+/// shouldn't stop dictation from working at all.
+fn resolve_device(host: &cpal::Host, device_name: Option<&str>) -> Option<cpal::Device> {
+    if let Some(name) = device_name {
+        if let Ok(mut devices) = host.input_devices() {
+            if let Some(device) = devices.find(|d| d.name().map(|n| n == name).unwrap_or(false)) {
+                return Some(device);
+            }
+        }
+        tracing::warn!(name, "selected microphone not found — falling back to system default");
+    }
+    host.default_input_device()
+}
+
 pub struct CaptureSession {
     stop_tx: std_mpsc::Sender<()>,
     join: std::thread::JoinHandle<()>,
@@ -31,14 +65,16 @@ pub struct CaptureSession {
 }
 
 impl CaptureSession {
-    /// Starts capturing from the default input device immediately.
+    /// Starts capturing immediately from `device_name` if given and still
+    /// present, falling back to the system default input device
+    /// otherwise (including when `device_name` is `None` — no selection
+    /// made yet, or the user picked "System Default" explicitly).
     /// Buffering begins before the caller knows whether this will become
     /// a real recording (PROMPT.md hazard #2: waiting for the 150 ms
     /// chord window to resolve first would clip the first syllable).
-    pub fn start() -> Result<Self, String> {
+    pub fn start(device_name: Option<&str>) -> Result<Self, String> {
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
+        let device = resolve_device(&host, device_name)
             .ok_or_else(|| "no default input device".to_string())?;
         let supported = device
             .default_input_config()

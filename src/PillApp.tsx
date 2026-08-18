@@ -9,6 +9,13 @@ interface ShowPayload {
   language: string;
 }
 
+// The fully rounded stadium shape (pill.css's `.pill` border-radius) glitches
+// in WebView2's transparent-window compositing on Windows — corners outside
+// the radius don't clear properly. Square corners sidestep it. macOS (NSPanel
+// compositing, not WebView2) doesn't have this problem, so only Windows gets
+// the square variant.
+const IS_WINDOWS = navigator.userAgent.includes("Windows");
+
 function PillApp() {
   const [state, setState] = useState<PillState>("hidden");
   const [label, setLabel] = useState("");
@@ -47,12 +54,14 @@ function PillApp() {
     };
   }, []);
 
+  const shapeClass = IS_WINDOWS ? "pill-square" : "";
+
   if (state === "hidden") {
-    return <div className="pill pill-hidden" />;
+    return <div className={`pill pill-hidden ${shapeClass}`} />;
   }
 
   return (
-    <div className={`pill pill-${state}`}>
+    <div className={`pill pill-${state} ${shapeClass}`}>
       <SonicWaveform level={state === "recording" ? level : 0} active={state === "recording"} />
       <div className="pill-label">
         {state === "matched" ? `✓ ${label}` : state === "transcribing" ? "…" : label}

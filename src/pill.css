@@ -38,6 +38,13 @@ body {
   opacity: 0;
 }
 
+/* Windows only (see PillApp.tsx's IS_WINDOWS check) — rounded corners don't
+   composite cleanly against a transparent WebView2 window, so square them
+   off instead of chasing the transparency glitch. */
+.pill-square {
+  border-radius: 0;
+}
+
 .pill-transcribing {
   opacity: 0.4;
 }

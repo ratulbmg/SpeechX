@@ -63,6 +63,58 @@ jobs:
           lipo -info "$BINARY" | grep -q "arm64"  || (echo "MISSING arm64 slice"  && exit 1)
           echo "Universal binary verified."
 
+      # Tauri's own ad-hoc signing step sometimes produces a bundle where
+      # the signature claims sealed resources exist but none are recorded
+      # ("code has no resources but signature indicates they must be
+      # present" — a known, generic macOS bundler quirk, not specific to
+      # this project). A plain double-click launch fails against a
+      # signature like that. `scripts/install_local.sh` works around this
+      # for local dev builds by re-signing the assembled .app in one pass
+      # after `tauri build` finishes — this step does the same thing here,
+      # so the DMG actually shipped in the GitHub Release doesn't have the
+      # bug that only local builds were silently avoiding. The DMG above
+      # was already built from the *unsigned-correctly* app, so it has to
+      # be rebuilt from the now-properly-signed one — re-signing the .app
+      # alone doesn't retroactively fix a DMG already assembled from it.
+      - name: Re-sign app and rebuild DMG
+        run: |
+          set -euo pipefail
+          APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/SpeechX.app"
+          DMG_DIR="src-tauri/target/universal-apple-darwin/release/bundle/dmg"
+
+          echo "Re-signing $APP ..."
+          signed=false
+          for attempt in 1 2 3 4 5; do
+            if codesign --force --deep --sign - "$APP"; then
+              signed=true
+              break
+            fi
+            echo "codesign attempt $attempt failed (likely a transient lock) — retrying in 2s..."
+            sleep 2
+          done
+          if [ "$signed" != true ]; then
+            echo "codesign failed after 5 attempts — not a transient lock, something else is wrong." >&2
+            exit 1
+          fi
+          codesign --verify --deep --strict "$APP"
+
+          DMG_PATH=$(find "$DMG_DIR" -name "*.dmg" | head -1)
+          if [ -z "$DMG_PATH" ]; then
+            echo "No .dmg found in $DMG_DIR — expected one from the build step above." >&2
+            exit 1
+          fi
+          DMG_NAME=$(basename "$DMG_PATH")
+          echo "Rebuilding $DMG_NAME from the re-signed app ..."
+          rm -f "$DMG_PATH"
+
+          STAGING=$(mktemp -d)
+          cp -R "$APP" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+          hdiutil create -volname "SpeechX" -srcfolder "$STAGING" -ov -format UDZO "$DMG_DIR/$DMG_NAME"
+          rm -rf "$STAGING"
+
+          echo "Done: $DMG_DIR/$DMG_NAME"
+
       - name: Upload macOS DMG
         uses: actions/upload-artifact@v7
         with:

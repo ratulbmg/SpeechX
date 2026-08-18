@@ -63,6 +63,32 @@ pub fn set_listening_enabled(enabled: bool, state: State<ListeningState>) {
     state.set_listening(enabled);
 }
 
+/// The dashboard's microphone picker (Controls tab). `None` means
+/// "System Default" — whatever the OS currently considers the default
+/// input device, tracking it live if the user changes it system-wide.
+/// Shared with `hotkey::run` -> `AudioController`, which reads it fresh
+/// on every dictation session (`lib.rs::run` constructs this once and
+/// passes clones to both).
+pub struct SelectedMicrophone(pub Arc<Mutex<Option<String>>>);
+
+/// Every input device currently available, for the picker's dropdown.
+/// Same call on macOS and Windows — `cpal` abstracts the OS difference.
+#[tauri::command]
+pub fn list_microphones() -> Vec<String> {
+    crate::audio::list_input_device_names()
+}
+
+/// Read-only — safe to poll on a timer from the dashboard.
+#[tauri::command]
+pub fn get_selected_microphone(state: State<SelectedMicrophone>) -> Option<String> {
+    state.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+#[tauri::command]
+pub fn set_selected_microphone(name: Option<String>, state: State<SelectedMicrophone>) {
+    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = name;
+}
+
 #[tauri::command]
 pub fn quit_app(app: AppHandle) {
     app.exit(0);
@@ -116,70 +142,5 @@ pub fn check_input_monitoring_permission() -> bool {
     #[cfg(not(target_os = "macos"))]
     {
         true
-    }
-}
-
-/// Called from the dashboard's Accessibility button — not automatically
-/// at launch, so the system prompt only ever appears because the user
-/// asked for it.
-///
-/// Unlike Microphone, Accessibility's system alert reappears every time
-/// this is called while access is untrusted, even if the user dismissed
-/// it before — its alert has its own "Open System Settings" button, so
-/// there's always a path forward without a separate settings-deep-link
-/// command here.
-#[tauri::command]
-pub fn request_accessibility_permission() {
-    #[cfg(target_os = "macos")]
-    {
-        crate::permissions::macos::ensure_accessibility();
-    }
-}
-
-/// Called from the dashboard's Input Monitoring button — previously
-/// bundled into `request_accessibility_permission` (one click requested
-/// both, since both gate the same underlying capability: the global
-/// hotkey listener), now split out now that the dashboard shows Input
-/// Monitoring as its own row with its own status.
-///
-/// Unlike Accessibility's prompt, `IOHIDRequestAccess`'s system dialog is
-/// known to silently fail to appear at all if `AXIsProcessTrustedWithOptions`
-/// (Accessibility's check — which the dashboard polls continuously the
-/// whole time it's open) has already been called earlier in the same
-/// process's life, which by the time anyone reaches this tab it always
-/// has. So this can't be relied on alone: also deep-link straight to
-/// System Settings' Input Monitoring pane, same pattern as the old
-/// settings-opening commands this file used to have before Accessibility
-/// switched to prompting directly — a manual path that works regardless
-/// of whether the native dialog rendered.
-#[tauri::command]
-pub fn request_input_monitoring_permission() -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        crate::permissions::macos::ensure_input_monitoring();
-        tauri_plugin_opener::open_url(
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
-            None::<&str>,
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// Called from the dashboard's Microphone button. Blocking (waits on
-/// CoreAudio and, the first time, the user's answer to the system
-/// dialog) — fine here since Tauri runs command handlers off the main
-/// thread already.
-///
-/// Note: unlike Accessibility, macOS's microphone consent is a genuine
-/// one-time decision — if the user has already denied it, this call
-/// fails silently with no dialog (same as any other retry), and the only
-/// way back is System Settings. Not handled here; the dashboard doesn't
-/// yet distinguish "not yet decided" from "already denied" for mic.
-#[tauri::command]
-pub fn request_microphone_permission() {
-    #[cfg(target_os = "macos")]
-    {
-        crate::audio::warm_up_microphone_permission();
     }
 }

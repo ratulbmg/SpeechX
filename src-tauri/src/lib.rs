@@ -12,10 +12,57 @@ mod permissions;
 mod tray;
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
+
+/// Requests Accessibility, then Input Monitoring, then Microphone, in
+/// that order — each one only requested once the previous is confirmed
+/// granted, automatically at launch, rather than waiting for the user to
+/// click through the dashboard's Permissions tab (which is now a
+/// read-only status display, not a set of action buttons — see
+/// `src/App.tsx`). A step whose permission is already granted (a second
+/// launch, say) skips straight past it: `ensure_accessibility`/
+/// `ensure_input_monitoring` are themselves no-ops when already trusted,
+/// and the loop below exits on its very first check.
+///
+/// This ordering isn't arbitrary: it's also a mitigation for a real bug
+/// found earlier — `IOHIDRequestAccess` (Input Monitoring's prompt) can
+/// silently fail to appear at all if `AXIsProcessTrustedWithOptions`
+/// (Accessibility's check) has already been polled aggressively earlier
+/// in the process's life. Waiting for Accessibility to fully resolve
+/// before ever touching Input Monitoring keeps that interaction as
+/// clean as possible, though it isn't a guaranteed fix — the dashboard's
+/// "Manual steps" link is still there for when a prompt doesn't show.
+///
+/// macOS-only: Windows has no equivalent consent flow to sequence (see
+/// `permissions::macos`'s module doc comment) — its one relevant call,
+/// the microphone warm-up, has no user-facing prompt to sequence around
+/// at all, so it just runs directly wherever this is called from.
+#[cfg(target_os = "macos")]
+async fn onboard_permissions_sequentially() {
+    use permissions::macos::{
+        accessibility_authorized, ensure_accessibility, ensure_input_monitoring, input_monitoring_authorized,
+    };
+
+    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(800);
+
+    ensure_accessibility();
+    while !accessibility_authorized() {
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+    tracing::info!("accessibility granted — requesting input monitoring next");
+
+    ensure_input_monitoring();
+    while !input_monitoring_authorized() {
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+    tracing::info!("input monitoring granted — requesting microphone next");
+
+    audio::warm_up_microphone_permission();
+    tracing::info!("permission onboarding sequence complete");
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -46,9 +93,14 @@ pub fn run() {
     // Dashboard-controlled master switch (src/App.tsx's "Listening"
     // toggle) — read by the hotkey loop on every Right Command press.
     let listening_enabled = Arc::new(AtomicBool::new(true));
+    // Dashboard-controlled microphone picker (Controls tab) — `None`
+    // means "System Default". Read fresh by `AudioController` on every
+    // dictation session, so switching devices takes effect immediately.
+    let selected_microphone: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     builder
         .manage(commands::ListeningState::new(listening_enabled.clone()))
+        .manage(commands::SelectedMicrophone(selected_microphone.clone()))
         .setup(move |app| {
             // SpeechX is meant to run as a background/menu-bar utility
             // (PROMPT.md §1) — without this, Tauri defaults to
@@ -119,19 +171,29 @@ pub fn run() {
             }
             tray::create(app.handle())?;
 
-            // Accessibility / Input Monitoring / Microphone are requested
-            // on demand from the dashboard's Permissions tab
-            // (`commands::request_accessibility_permission`,
-            // `commands::request_microphone_permission`), not
-            // automatically here — installing or launching SpeechX should
-            // never itself trigger a system permission dialog. Until the
-            // user grants Accessibility, the hotkey listener below just
-            // sits retrying in the background (see `listener.rs`'s
-            // documented backoff loop); it starts working within seconds
-            // of the grant, whenever that happens.
+            // Accessibility, then Input Monitoring, then Microphone — asked
+            // for automatically, one at a time, right at launch (see
+            // `onboard_permissions_sequentially` above). The dashboard's
+            // Permissions tab is now a read-only status display, not a set
+            // of buttons the user has to click through. Until Accessibility
+            // is actually granted, the hotkey listener below just sits
+            // retrying in the background (see `listener.rs`'s documented
+            // backoff loop); it starts working within seconds of the
+            // grant, whenever that happens.
+            #[cfg(target_os = "macos")]
+            tauri::async_runtime::spawn(onboard_permissions_sequentially());
+            // Windows has no Accessibility/Input Monitoring equivalent to
+            // sequence in front of this (see `permissions::macos`'s module
+            // doc comment) — just trigger the one prompt it does have
+            // (the system-wide microphone privacy toggle) directly at
+            // launch, same as the last step of the macOS chain above.
+            #[cfg(not(target_os = "macos"))]
+            tauri::async_runtime::spawn_blocking(audio::warm_up_microphone_permission);
+
             let hotkey_app = app.handle().clone();
             let hotkey_listening_enabled = listening_enabled.clone();
-            tauri::async_runtime::spawn(hotkey::run(hotkey_app, hotkey_listening_enabled));
+            let hotkey_selected_microphone = selected_microphone.clone();
+            tauri::async_runtime::spawn(hotkey::run(hotkey_app, hotkey_listening_enabled, hotkey_selected_microphone));
 
             // The pill overlay (PROMPT.md §10 / M5): built once, hidden,
             // then shown/hidden per dictation session by the hotkey loop.
@@ -168,11 +230,11 @@ pub fn run() {
             commands::check_microphone_permission,
             commands::check_accessibility_permission,
             commands::check_input_monitoring_permission,
-            commands::request_accessibility_permission,
-            commands::request_input_monitoring_permission,
-            commands::request_microphone_permission,
             commands::get_listening_enabled,
             commands::set_listening_enabled,
+            commands::list_microphones,
+            commands::get_selected_microphone,
+            commands::set_selected_microphone,
             commands::quit_app,
         ])
         .run(tauri::generate_context!())

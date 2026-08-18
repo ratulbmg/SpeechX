@@ -86,6 +86,31 @@ h1 {
   color: #888;
 }
 
+.mic-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.mic-select {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 180px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 0.82em;
+  font-family: inherit;
+  color: #1a1a1a;
+  background-color: #fff;
+  cursor: pointer;
+}
+
 .switch {
   flex-shrink: 0;
   width: 38px;
@@ -203,33 +228,21 @@ h1 {
   color: #2f5bb8;
 }
 
-.permission-button {
-  border: none;
+.permission-status {
+  flex-shrink: 0;
   border-radius: 7px;
-  padding: 6px 12px;
-  font-size: 0.85em;
+  padding: 5px 12px;
+  font-size: 0.78em;
   font-weight: 600;
   font-family: inherit;
-  cursor: pointer;
-  color: #fff;
-  background-color: #396cd8;
-  transition:
-    background-color 0.2s,
-    opacity 0.2s;
-}
-
-.permission-button:hover:not(:disabled) {
-  background-color: #2f5bb8;
-}
-
-.permission-button:disabled {
-  cursor: default;
+  color: #888;
+  background-color: rgba(0, 0, 0, 0.08);
 }
 
 /* Teal, matching the pill overlay's accent color. */
-.permission-button.granted {
+.permission-status.granted {
+  color: #fff;
   background-color: rgb(0, 190, 143);
-  opacity: 0.9;
 }
 
 .hint {
@@ -278,8 +291,23 @@ h1 {
     background: rgba(255, 255, 255, 0.06);
   }
 
+  .permission-status {
+    color: #aaa;
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+
   .toggle-row {
     background: rgba(0, 190, 143, 0.15);
+  }
+
+  .mic-row {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .mic-select {
+    color: #f0f0f0;
+    background-color: #2f2f2f;
+    border-color: rgba(255, 255, 255, 0.18);
   }
 
   .switch {

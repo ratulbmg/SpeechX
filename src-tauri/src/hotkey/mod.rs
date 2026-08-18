@@ -42,7 +42,12 @@ fn read_active_language(lock: &Mutex<LanguageCode>) -> LanguageCode {
 /// disabling it stops new sessions from arming. A session already
 /// in-flight when it flips off is left to finish normally; only the next
 /// press is blocked.
-pub async fn run(app: AppHandle, listening_enabled: Arc<AtomicBool>) {
+///
+/// `selected_microphone` is the dashboard's microphone picker
+/// (`commands::SelectedMicrophone`) — `AudioController` reads it fresh on
+/// every session start, so switching microphones takes effect on the
+/// very next press, no relaunch needed.
+pub async fn run(app: AppHandle, listening_enabled: Arc<AtomicBool>, selected_microphone: Arc<Mutex<Option<String>>>) {
     let mut rx = match listener::spawn_listener() {
         Ok(rx) => rx,
         Err(err) => {
@@ -54,7 +59,7 @@ pub async fn run(app: AppHandle, listening_enabled: Arc<AtomicBool>) {
     info!("hotkey listener attached — hold Right Cmd to dictate, Right Cmd + Right Option to switch language");
 
     let mut machine = ChordMachine::new();
-    let mut audio = AudioController::new(app.clone());
+    let mut audio = AudioController::new(app.clone(), selected_microphone);
     let mut arm_deadline: Option<Instant> = None;
     let active_language = Arc::new(Mutex::new(LanguageCode::En));
 

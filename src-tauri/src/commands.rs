@@ -99,11 +99,29 @@ pub fn check_accessibility_permission() -> bool {
     }
 }
 
+/// Read-only — never prompts. Safe to poll on a timer from the dashboard.
+///
+/// macOS-only: Windows has no equivalent permission gate for global
+/// keyboard hooks (see `check_accessibility_permission`'s Windows arm) —
+/// `SetWindowsHookEx` just works without OS-level consent, so there's
+/// nothing to show a status for there. Always `true` on Windows, matching
+/// the pattern the other checks already use, so the dashboard doesn't
+/// need its own per-platform branching in `src/App.tsx`.
+#[tauri::command]
+pub fn check_input_monitoring_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        crate::permissions::macos::input_monitoring_authorized()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
 /// Called from the dashboard's Accessibility button — not automatically
 /// at launch, so the system prompt only ever appears because the user
-/// asked for it. Also requests Input Monitoring in the same click: both
-/// gate the same underlying capability (the global hotkey listener), and
-/// the dashboard only shows one row for it.
+/// asked for it.
 ///
 /// Unlike Microphone, Accessibility's system alert reappears every time
 /// this is called while access is untrusted, even if the user dismissed
@@ -115,8 +133,37 @@ pub fn request_accessibility_permission() {
     #[cfg(target_os = "macos")]
     {
         crate::permissions::macos::ensure_accessibility();
-        crate::permissions::macos::ensure_input_monitoring();
     }
+}
+
+/// Called from the dashboard's Input Monitoring button — previously
+/// bundled into `request_accessibility_permission` (one click requested
+/// both, since both gate the same underlying capability: the global
+/// hotkey listener), now split out now that the dashboard shows Input
+/// Monitoring as its own row with its own status.
+///
+/// Unlike Accessibility's prompt, `IOHIDRequestAccess`'s system dialog is
+/// known to silently fail to appear at all if `AXIsProcessTrustedWithOptions`
+/// (Accessibility's check — which the dashboard polls continuously the
+/// whole time it's open) has already been called earlier in the same
+/// process's life, which by the time anyone reaches this tab it always
+/// has. So this can't be relied on alone: also deep-link straight to
+/// System Settings' Input Monitoring pane, same pattern as the old
+/// settings-opening commands this file used to have before Accessibility
+/// switched to prompting directly — a manual path that works regardless
+/// of whether the native dialog rendered.
+#[tauri::command]
+pub fn request_input_monitoring_permission() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::permissions::macos::ensure_input_monitoring();
+        tauri_plugin_opener::open_url(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+            None::<&str>,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Called from the dashboard's Microphone button. Blocking (waits on

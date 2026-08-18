@@ -176,8 +176,31 @@ h1 {
   background: rgba(0, 0, 0, 0.04);
 }
 
+.permission-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: 1px;
+}
+
 .permission-label {
   font-weight: 500;
+}
+
+.permission-manual-link {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 0.74em;
+  font-family: inherit;
+  color: #396cd8;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.permission-manual-link:hover {
+  color: #2f5bb8;
 }
 
 .permission-button {

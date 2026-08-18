@@ -167,7 +167,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::check_microphone_permission,
             commands::check_accessibility_permission,
+            commands::check_input_monitoring_permission,
             commands::request_accessibility_permission,
+            commands::request_input_monitoring_permission,
             commands::request_microphone_permission,
             commands::get_listening_enabled,
             commands::set_listening_enabled,

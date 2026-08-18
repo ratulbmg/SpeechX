@@ -15,7 +15,7 @@
         "label": "main",
         "title": "SpeechX",
         "width": 420,
-        "height": 440,
+        "height": 520,
         "resizable": false,
         "visible": true,
         "skipTaskbar": false

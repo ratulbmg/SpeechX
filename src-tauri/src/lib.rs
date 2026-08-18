@@ -76,6 +76,39 @@ pub fn run() {
             // unaffected by closing the window either way; this just
             // makes the window itself recoverable too.
             if let Some(window) = app.get_webview_window("main") {
+                // Belt-and-suspenders with `Info.plist`'s
+                // `NSQuitAlwaysKeepsWindows` (which only affects whether
+                // the OS *saves* state to restore): this is the actual
+                // NSWindow-level flag Apple's restoration system checks
+                // per-window. Without it, a prior abrupt termination
+                // (a force-quit, `kill`, or `app.exit()`'s own abrupt
+                // process exit — all routine for a background utility
+                // like this one) can leave macOS's Resume feature
+                // thinking a restoration is owed, showing "SpeechX quit
+                // unexpectedly while reopening windows" on a later
+                // launch. SpeechX has no session state worth restoring
+                // (the dashboard reopens on demand via the tray icon), so
+                // it opts the window out of restoration entirely, at the
+                // AppKit level directly, rather than relying on the
+                // Info.plist preference alone.
+                #[cfg(target_os = "macos")]
+                {
+                    use objc2::msg_send;
+                    use objc2::runtime::AnyObject;
+
+                    if let Ok(ns_window_ptr) = window.ns_window() {
+                        // SAFETY: `ns_window()` hands back a valid,
+                        // non-null NSWindow* for as long as the window
+                        // exists (Tauri's own contract for this method);
+                        // `setRestorable:` is a plain property setter, no
+                        // side effects beyond flipping that flag.
+                        unsafe {
+                            let ns_window = ns_window_ptr as *mut AnyObject;
+                            let _: () = msg_send![ns_window, setRestorable: false];
+                        }
+                    }
+                }
+
                 let window_to_hide = window.clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {

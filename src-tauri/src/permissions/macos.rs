@@ -34,6 +34,7 @@ extern "C" {
 #[link(name = "IOKit", kind = "framework")]
 extern "C" {
     fn IOHIDRequestAccess(request_type: u32) -> u8;
+    fn IOHIDCheckAccess(request_type: u32) -> u32;
 }
 
 // Apple's own exported NSString constant identifying the audio media
@@ -49,6 +50,8 @@ extern "C" {
 const AV_AUTHORIZATION_STATUS_AUTHORIZED: isize = 3;
 
 const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
+/// `IOHIDAccessType.kIOHIDAccessTypeGranted`, per IOHIDLib's own enum.
+const K_IOHID_ACCESS_TYPE_GRANTED: u32 = 0;
 
 /// Checks Accessibility access, prompting the user if it hasn't been
 /// decided yet. macOS renders its own system dialog and manages the
@@ -80,16 +83,47 @@ pub fn ensure_input_monitoring() {
     );
 }
 
+/// Checks Input Monitoring access WITHOUT prompting, via `IOHIDCheckAccess`
+/// — a separate function from `ensure_input_monitoring`'s
+/// `IOHIDRequestAccess`, specifically documented as a pure read that never
+/// shows the system prompt.
+///
+/// This matters on its own, separately from Accessibility: `rdev`'s
+/// macOS event tap is created at `kCGHIDEventTap` (see
+/// `vendor/rdev-0.5.3/src/macos/listen.rs`), which is gated by Input
+/// Monitoring, not (only) Accessibility — the two are independently
+/// grantable, and the dashboard's single "Accessibility" button
+/// requesting both at once doesn't mean they resolve at the same time.
+/// The hotkey listener needs to wait for *both* before it's safe to
+/// create the tap; waiting on Accessibility alone left the same
+/// dead-tap-until-relaunch gap open for Input Monitoring specifically.
+pub fn input_monitoring_authorized() -> bool {
+    // SAFETY: takes a plain integer constant, no pointers involved; safe
+    // to call from any thread, and — unlike `IOHIDRequestAccess` — never
+    // prompts, so it's safe to poll from a loop.
+    unsafe { IOHIDCheckAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) == K_IOHID_ACCESS_TYPE_GRANTED }
+}
+
 /// Checks Accessibility access WITHOUT prompting — same underlying API
-/// as `ensure_accessibility`, but with the prompt option left out
-/// entirely (an empty options dict, same as passing NULL), so the
-/// dashboard can poll this on a timer without ever side-effecting a
-/// system dialog just from being open.
+/// as `ensure_accessibility`, but passing NULL for `options` instead of
+/// the prompt dictionary. `AXIsProcessTrustedWithOptions`'s `options`
+/// parameter is documented as nullable, and NULL is Apple's own pattern
+/// for a no-prompt check — so the dashboard can poll this on a timer
+/// without ever side-effecting a system dialog just from being open.
+///
+/// Previously this built an *empty* `CFDictionary` instead of passing
+/// NULL, on the assumption the two were equivalent — they're not:
+/// polling that version from the dashboard every 2 seconds crashed
+/// intermittently (`EXC_BAD_ACCESS` inside `CFGetTypeID`, called from
+/// `AXIsProcessTrustedWithOptions`), consistently reproducible after a
+/// few seconds of the dashboard being open. Passing NULL directly avoids
+/// constructing a CFDictionary at all, sidestepping whatever made the
+/// empty one unstable.
 pub fn accessibility_authorized() -> bool {
-    let options: CFDictionary<CFString, CFBoolean> = CFDictionary::from_CFType_pairs(&[]);
-    // SAFETY: same call as `ensure_accessibility`, just with an empty
-    // (still valid, non-null) options dictionary.
-    unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) != 0 }
+    // SAFETY: NULL is an explicitly documented valid value for `options`
+    // here — this isn't an unchecked null-pointer dereference, it's the
+    // API's own "just check, don't prompt" mode.
+    unsafe { AXIsProcessTrustedWithOptions(std::ptr::null()) != 0 }
 }
 
 /// Checks microphone access WITHOUT prompting. Unlike Accessibility,

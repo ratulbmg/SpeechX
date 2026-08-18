@@ -19,6 +19,40 @@ pub enum RawKeyEvent {
 
 const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(10);
+const PERMISSION_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Blocks until Accessibility *and* Input Monitoring are both confirmed
+/// granted. macOS only — Windows has no equivalent per-app gate, so this
+/// returns immediately there.
+///
+/// `rdev::listen` does NOT error when either permission isn't granted yet
+/// — per its own documented behavior (see `permissions::macos`'s doc
+/// comment), it silently creates a dead event tap that blocks forever
+/// *without ever delivering an event or returning*, no error raised. That
+/// meant the retry-on-`Err` loop below couldn't help with the single most
+/// common case: the normal onboarding flow is launch → dashboard opens →
+/// user clicks Grant Access *while the app is already running* — so the
+/// very first `listen()` call usually starts (and hangs, dead) before the
+/// grant ever happens, and the retry loop never gets a failure to react
+/// to. Waiting here, immediately before every `listen()` attempt, means a
+/// tap only ever gets created once both permissions are confirmed real —
+/// closing that gap without needing a relaunch.
+///
+/// Both, not just Accessibility: `rdev`'s tap is created at
+/// `kCGHIDEventTap` (see `vendor/rdev-0.5.3/src/macos/listen.rs`), which
+/// is gated by Input Monitoring — a separate, independently-grantable
+/// permission from Accessibility. The dashboard's single "Accessibility"
+/// button requests both at once, but nothing guarantees they're decided
+/// by the user at the same moment, so both need to be waited on here.
+fn wait_for_accessibility() {
+    #[cfg(target_os = "macos")]
+    {
+        use crate::permissions::macos::{accessibility_authorized, input_monitoring_authorized};
+        while !accessibility_authorized() || !input_monitoring_authorized() {
+            std::thread::sleep(PERMISSION_POLL_INTERVAL);
+        }
+    }
+}
 
 pub fn spawn_listener() -> std::io::Result<mpsc::UnboundedReceiver<RawKeyEvent>> {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -26,21 +60,14 @@ pub fn spawn_listener() -> std::io::Result<mpsc::UnboundedReceiver<RawKeyEvent>>
     std::thread::Builder::new()
         .name("speechx-hotkey-listener".into())
         .spawn(move || {
-            // Creating the event tap requires Accessibility + Input
-            // Monitoring to already be granted. On a fresh install, the
-            // permission dialogs `permissions::macos` triggers at startup
-            // take the user a few seconds to click through — by the time
-            // they answer, a single `listen()` attempt has usually
-            // already failed, since rdev doesn't retry internally and
-            // just returns an error immediately. Without a retry here,
-            // granting permission moments later does nothing: this
-            // thread would already be dead for the rest of the session,
-            // and only a full quit+relaunch would pick up the grant.
-            // Retrying with capped backoff instead means it starts
-            // working within seconds of permission being granted,
-            // whenever that happens, with no relaunch needed.
+            // See `wait_for_accessibility`'s doc comment for why this
+            // retry loop alone isn't sufficient, and why the wait is
+            // needed before every attempt, not just logically "the
+            // first" — a transient `Err` retry re-enters the same gap.
             let mut delay = INITIAL_RETRY_DELAY;
             loop {
+                wait_for_accessibility();
+
                 let tx = tx.clone();
                 let callback = move |event: Event| {
                     let mapped = match event.event_type {

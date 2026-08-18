@@ -12,3 +12,6 @@ pub mod panel;
 
 #[cfg(target_os = "windows")]
 pub mod windows;
+
+#[cfg(target_os = "windows")]
+pub mod pill_windows;

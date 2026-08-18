@@ -4,7 +4,7 @@ use std::os::raw::c_int;
 use std::ptr::null_mut;
 use std::time::SystemTime;
 use winapi::shared::minwindef::{LPARAM, LRESULT, WPARAM};
-use winapi::um::winuser::{CallNextHookEx, GetMessageA, HC_ACTION};
+use winapi::um::winuser::{CallNextHookEx, DispatchMessageA, GetMessageA, TranslateMessage, HC_ACTION, MSG};
 
 static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(Event)>> = None;
 
@@ -58,7 +58,18 @@ where
         set_key_hook(raw_callback)?;
         set_mouse_hook(raw_callback)?;
 
-        GetMessageA(null_mut(), null_mut(), 0, 0);
+        // A proper Windows message pump is required for WH_KEYBOARD_LL hooks:
+        // Windows delivers hook callbacks by posting to the installing thread's
+        // message queue, so this thread must keep calling GetMessageA to service
+        // them. The original code passed null for lpMsg (undefined behaviour —
+        // GetMessageA returns -1 immediately on Windows), which caused listen()
+        // to return Ok(()) right away, breaking out of the retry loop and killing
+        // the listener thread before any hook events could ever be received.
+        let mut msg: MSG = std::mem::zeroed();
+        while GetMessageA(&mut msg, null_mut(), 0, 0) > 0 {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
     }
     Ok(())
 }

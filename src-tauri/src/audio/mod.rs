@@ -109,8 +109,8 @@ fn spawn_level_forwarder(level_rx: std::sync::mpsc::Receiver<f32>, app: AppHandl
             last_emit = now;
             #[cfg(target_os = "macos")]
             crate::overlay::panel::emit_audio_level(&app, level);
-            #[cfg(not(target_os = "macos"))]
-            let _ = (&app, level);
+            #[cfg(target_os = "windows")]
+            crate::overlay::pill_windows::emit_audio_level(&app, level);
         }
     });
 }

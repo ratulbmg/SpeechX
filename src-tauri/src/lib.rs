@@ -137,6 +137,8 @@ pub fn run() {
             // then shown/hidden per dictation session by the hotkey loop.
             #[cfg(target_os = "macos")]
             overlay::panel::create(app.handle())?;
+            #[cfg(target_os = "windows")]
+            overlay::pill_windows::create(app.handle())?;
 
             // Load + warm the command-recognition engine and both
             // dictation engines (English/Whisper, Bengali/Zipformer) up

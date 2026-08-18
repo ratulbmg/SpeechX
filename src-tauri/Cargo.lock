@@ -3823,7 +3823,7 @@ dependencies = [
 
 [[package]]
 name = "speechx"
-version = "1.4.2"
+version = "1.4.3"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.1",
